@@ -1,0 +1,17 @@
+[package]
+name = "sc-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Command-line frontend for the Smart Cleaner core (future sidecar)"
+
+[[bin]]
+name = "sc-cleaner"
+path = "src/main.rs"
+
+[dependencies]
+sc-file-models = { workspace = true }
+sc-risk-engine = { workspace = true }
+sc-safety-engine = { workspace = true }
+sc-scanner = { workspace = true }

@@ -1,0 +1,24 @@
+# Rust
+**/target/
+**/*.rs.bk
+
+# Node / Electron (milestone M2)
+node_modules/
+dist/
+out/
+release/
+
+# Local state — never commit
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+.quarantine/
+vault.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

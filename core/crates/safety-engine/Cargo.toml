@@ -1,0 +1,12 @@
+[package]
+name = "sc-safety-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The FINAL GATE: hard safety rules that override everything, including AI"
+
+[dependencies]
+serde = { workspace = true }
+sc-file-models = { workspace = true }
+sc-risk-engine = { workspace = true }

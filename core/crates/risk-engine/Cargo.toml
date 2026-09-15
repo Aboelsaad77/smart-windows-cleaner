@@ -1,0 +1,11 @@
+[package]
+name = "sc-risk-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Scores the risk of deleting each file (0-100) with explainable factors"
+
+[dependencies]
+serde = { workspace = true }
+sc-file-models = { workspace = true }

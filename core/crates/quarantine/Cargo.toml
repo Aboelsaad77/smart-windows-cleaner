@@ -1,0 +1,15 @@
+[package]
+name = "sc-quarantine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Reversible-delete vault: quarantine, restore, retention, purge"
+
+[dependencies]
+fs2 = { workspace = true }
+sc-file-models = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }

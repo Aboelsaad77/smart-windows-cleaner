@@ -1,0 +1,10 @@
+[package]
+name = "sc-file-models"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared data models for the Smart Cleaner native core"
+
+[dependencies]
+serde = { workspace = true }

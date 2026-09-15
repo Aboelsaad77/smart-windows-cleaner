@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/file-models",
+    "crates/risk-engine",
+    "crates/safety-engine",
+    "crates/quarantine",
+    "crates/scanner",
+    "crates/db",
+    "crates/ai-gateway",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+authors = ["Aboelsaad77"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4", "serde"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+fs2 = "0.4"
+
+sc-file-models = { path = "crates/file-models" }
+sc-risk-engine = { path = "crates/risk-engine" }
+sc-safety-engine = { path = "crates/safety-engine" }
+sc-quarantine = { path = "crates/quarantine" }
+sc-scanner = { path = "crates/scanner" }
+sc-db = { path = "crates/db" }
+sc-ai-gateway = { path = "crates/ai-gateway" }
+
+[profile.release]
+lto = true
+strip = true
