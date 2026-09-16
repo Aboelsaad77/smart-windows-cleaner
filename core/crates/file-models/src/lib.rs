@@ -238,9 +238,14 @@ pub mod known_paths {
     }
 
     /// Paths that belong to the Windows OS itself and must never be touched.
-    pub fn is_windows_protected_path(p: &Path) -> bool {
+    ///
+    /// `windir` is the normalized OS directory (e.g. `"c:\\windows"`).
+    /// Windows is not guaranteed to live on C: — audit F5.
+    pub fn is_windows_protected_path(p: &Path, windir: &str) -> bool {
         let n = norm(p);
-        n.starts_with("c:\\windows\\")
+        let wd_full = norm(std::path::Path::new(windir));
+        let wd = wd_full.trim_end_matches('\\');
+        n.starts_with(&format!("{wd}\\"))
             || n.contains("\\winsxs\\")
             || n.contains("\\driverstore\\")
             || n.contains("\\windows\\installer\\")
@@ -251,8 +256,59 @@ pub mod known_paths {
     }
 }
 
+/// Minimal PE (Portable Executable) structure inspection (M1, spec §3A).
+///
+/// Cross-platform: works on raw bytes, so dev and tests run anywhere.
+/// Authenticode *signature verification* needs the Windows API
+/// (WinVerifyTrust) and lives in the scanner's platform layer — this module
+/// only establishes "is this really a PE, and for which machine".
+pub mod pe {
+    /// Result of inspecting the head of a file.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct PeInfo {
+        /// DOS (MZ) + `PE\0\0` headers are present: structurally a PE.
+        pub is_pe: bool,
+        /// COFF machine type (e.g. [`AMD64`], [`X86`]) when PE.
+        pub machine: Option<u16>,
+        /// Optional-header magic: PE32 (true) vs PE32+ (false) when PE.
+        pub is_pe32: Option<bool>,
+    }
+
+    pub const X86: u16 = 0x014c;
+    pub const AMD64: u16 = 0x8664;
+    pub const ARM64: u16 = 0xaa64;
+
+    const PE32_MAGIC: u16 = 0x010b;
+
+    /// Inspect the first KiB(s) of a file. A short `data` slice simply
+    /// reports "not (yet) verifiable" rather than erroring.
+    pub fn inspect(data: &[u8]) -> PeInfo {
+        let mut info = PeInfo::default();
+        // DOS header: "MZ" at offset 0, e_lfanew (PE offset) at 0x3C.
+        if data.len() < 0x40 || &data[0..2] != b"MZ" {
+            return info;
+        }
+        let pe_off =
+            u32::from_le_bytes([data[0x3c], data[0x3d], data[0x3e], data[0x3f]]) as usize;
+        // The PE signature + COFF machine + optional-header magic must be
+        // inside the window we were given, and at a sane offset.
+        if pe_off >= 0x1000 || data.len() < pe_off + 26 {
+            return info;
+        }
+        if &data[pe_off..pe_off + 4] != b"PE\0\0" {
+            return info;
+        }
+        info.is_pe = true;
+        info.machine =
+            Some(u16::from_le_bytes([data[pe_off + 4], data[pe_off + 5]]));
+        info.is_pe32 = Some(u16::from_le_bytes([data[pe_off + 24], data[pe_off + 25]])
+            == PE32_MAGIC);
+        info
+    }
+}
+
 /// Best-effort content-kind inference from extension + filename.
-/// The intelligence layer refines this with PE/signature checks in M1.
+/// The scanner refines this with PE signature checks (see [`pe`]).
 pub fn infer_content_kind(path: &Path) -> ContentKind {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let ext = path
@@ -342,15 +398,29 @@ mod tests {
             "C:\\Users\\Bob\\Downloads\\vs-setup.exe"
         )));
 
-        assert!(known_paths::is_windows_protected_path(Path::new(
-            "C:\\Windows\\System32\\drivers\\x.sys"
-        )));
-        assert!(known_paths::is_windows_protected_path(Path::new(
-            "C:\\Windows\\WinSxS\\manifests\\x"
-        )));
-        assert!(!known_paths::is_windows_protected_path(Path::new(
-            "C:\\Program Files\\App\\x.dll"
-        )));
+        assert!(known_paths::is_windows_protected_path(
+            Path::new("C:\\Windows\\System32\\drivers\\x.sys"),
+            "c:\\windows"
+        ));
+        assert!(known_paths::is_windows_protected_path(
+            Path::new("C:\\Windows\\WinSxS\\manifests\\x"),
+            "c:\\windows"
+        ));
+        assert!(!known_paths::is_windows_protected_path(
+            Path::new("C:\\Program Files\\App\\x.dll"),
+            "c:\\windows"
+        ));
+        // Audit F5: the OS-drive prefix is not hardcoded to C:. A file that
+        // sits directly under the windir root matches only via the prefix, so
+        // it isolates the windir behavior from the drive-agnostic substrings.
+        assert!(known_paths::is_windows_protected_path(
+            Path::new("D:\\Windows\\bootmgr"),
+            "d:\\windows"
+        ));
+        assert!(!known_paths::is_windows_protected_path(
+            Path::new("D:\\Windows\\bootmgr"),
+            "c:\\windows"
+        ));
     }
 
     #[test]
@@ -392,5 +462,67 @@ mod tests {
         let r = FileRecord::new("a.txt", 10, 1_000_000);
         assert_eq!(r.age_days(1_000_000 + 3 * 86_400), 3);
         assert_eq!(r.age_days(999_000), 0);
+    }
+
+    // ---- M1: PE structure inspection ----
+
+    /// Build a minimal but structurally valid PE: MZ header at 0, e_lfanew
+    /// = 0x80, `PE\0\0` at 0x80, COFF machine, optional-header magic.
+    fn build_pe(machine: u16, optional_magic: u16) -> Vec<u8> {
+        let mut v = vec![0u8; 0x80 + 26];
+        v[0] = b'M';
+        v[1] = b'Z';
+        v[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        v[0x80..0x84].copy_from_slice(b"PE\0\0");
+        v[0x84..0x86].copy_from_slice(&machine.to_le_bytes());
+        v[0x80 + 24..0x80 + 26].copy_from_slice(&optional_magic.to_le_bytes());
+        v
+    }
+
+    #[test]
+    fn pe_inspect_valid_amd64() {
+        let v = build_pe(pe::AMD64, 0x20b);
+        let i = pe::inspect(&v);
+        assert!(i.is_pe);
+        assert_eq!(i.machine, Some(pe::AMD64));
+        assert_eq!(i.is_pe32, Some(false));
+    }
+
+    #[test]
+    fn pe_inspect_valid_x86_pe32() {
+        let v = build_pe(pe::X86, 0x010b);
+        let i = pe::inspect(&v);
+        assert!(i.is_pe);
+        assert_eq!(i.machine, Some(pe::X86));
+        assert_eq!(i.is_pe32, Some(true));
+    }
+
+    #[test]
+    fn pe_inspect_rejects_non_pe() {
+        assert!(!pe::inspect(b"just some text, no magic at all").is_pe);
+        assert!(!pe::inspect(b"").is_pe);
+        assert!(!pe::inspect(b"MZ").is_pe); // too short for a DOS header
+    }
+
+    #[test]
+    fn pe_inspect_rejects_mz_without_pe_signature() {
+        let mut v = vec![0u8; 0x80 + 4];
+        v[0] = b'M';
+        v[1] = b'Z';
+        v[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        // No "PE\0\0" at 0x80.
+        assert!(!pe::inspect(&v).is_pe);
+    }
+
+    #[test]
+    fn pe_inspect_rejects_bogus_lfanew() {
+        let mut v = build_pe(pe::AMD64, 0x20b);
+        // Point e_lfanew outside the window.
+        v[0x3c..0x40].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        assert!(!pe::inspect(&v).is_pe);
+        // And truncated right at the DOS header boundary.
+        let mut short = build_pe(pe::AMD64, 0x20b);
+        short.truncate(0x40);
+        assert!(!pe::inspect(&short).is_pe);
     }
 }

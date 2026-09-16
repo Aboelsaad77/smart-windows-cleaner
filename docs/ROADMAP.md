@@ -21,13 +21,24 @@ confidence.
 - `sc-cli`: `sc-cleaner` — reference CLI / future IPC sidecar
 - Unit tests across all crates, CI on Linux + Windows
 
-## M1 — Windows native depth
+## M1 — Windows native depth (in progress)
 
-- Real drive enumeration; elevation only for protected locations (spec §1)
-- `FILE_ATTRIBUTE_HIDDEN/SYSTEM`, process lock detection (in-use) (spec §3C)
-- PE header + Authenticode parsing → `is_pe`, `is_signed`, `signed_by`
-- Installed software registry from `Uninstall` keys → owner attribution (spec §4)
-- WinSxS/DriverStore safe-walk optimization
+- ✅ Real drive enumeration (all A–Z letters with an existing root, std-only)
+- ✅ In-use detection (spec §3C, audit F2): rename probe in `platform::is_in_use`,
+  plumbed into every `FileRecord`
+- ✅ PE header parsing → `is_pe` from **bytes**, not extension (spec §3A):
+  `sc_file_models::pe::inspect` (MZ + `PE\0\0` + COFF machine + PE32/PE32+),
+  applied in Smart mode for PE-extension files and in Deep mode for every file
+  (catches renamed/extensionless PEs); F8 extension assumption remains as the
+  read-failure fallback (fails closed)
+- ✅ Audit F5: `is_windows_protected_path` takes a `windir` parameter
+  (`SafetyPolicy::windir`, `platform::windir()` from `WINDIR`) — no more
+  hardcoded C:
+- ⏳ Elevation detection/requests, only for protected locations (spec §1)
+- ⏳ `FILE_ATTRIBUTE_HIDDEN/SYSTEM` (needs `windows-sys`)
+- ⏳ Authenticode → `is_signed`, `signed_by` (WinVerifyTrust, Windows-only)
+- ⏳ Installed software registry from `Uninstall` keys → owner attribution (spec §4)
+- ⏳ WinSxS/DriverStore safe-walk optimization
 
 ## M2 — Desktop UI (Electron + React)
 

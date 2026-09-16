@@ -218,16 +218,27 @@ impl Scanner {
                     content_kind: infer_content_kind(&path),
                     is_hidden: platform::is_hidden(&path),
                     is_system: false, // M1: FILE_ATTRIBUTE_SYSTEM on Windows
-                    // Conservative M0 assumption (audit F8): until M1 parses PE
-                    // headers + Authenticode, PE-extension files are treated as
-                    // unsigned PEs — this fails closed, so an unanalyzed binary
-                    // can never score below "review".
+                    // M1 (spec §3A): trust bytes over extension. PE-extension
+                    // files are confirmed against real MZ/PE headers; on read
+                    // failure the conservative extension assumption (audit F8)
+                    // stands, so an unanalyzed binary can never score below
+                    // "review".
                     is_pe: matches!(
                         ext.as_deref(),
                         Some("exe") | Some("dll") | Some("sys") | Some("drv")
                     ),
+                    // M1 (spec §3C, audit F2): real in-use detection.
+                    in_use: platform::is_in_use(&path),
                     ..Default::default()
                 };
+                if rec.is_pe {
+                    if let Ok(mut f) = fs::File::open(&path) {
+                        let mut head = [0u8; 4096];
+                        if let Ok(n) = f.read(&mut head) {
+                            rec.is_pe = sc_file_models::pe::inspect(&head[..n]).is_pe;
+                        }
+                    }
+                }
                 // Quick mode: known junk only.
                 if self.cfg.mode == ScanMode::Quick
                     && !(known_paths::is_temp_path(&path)
@@ -239,8 +250,12 @@ impl Scanner {
                 if self.cfg.mode == ScanMode::Deep {
                     if let Some(max) = self.cfg.hash_max_size {
                         if meta.len() <= max {
-                            if let Ok(h) = hash_file(&path) {
+                            if let Ok((h, head)) = hash_file(&path) {
                                 rec.sha256 = Some(h);
+                                // Deep mode: signature-based typing for every
+                                // file (spec §3A) — the bytes override the
+                                // extension-based assumption.
+                                rec.is_pe = sc_file_models::pe::inspect(&head).is_pe;
                             }
                         }
                     }
@@ -297,27 +312,35 @@ fn to_opt_epoch(t: io::Result<SystemTime>) -> Option<i64> {
         .map(|d| d.as_secs() as i64)
 }
 
-fn hash_file(path: &Path) -> io::Result<String> {
+/// SHA-256 of a file plus its first 4 KiB (for signature inspection),
+/// streamed in 64 KiB chunks.
+fn hash_file(path: &Path) -> io::Result<(String, Vec<u8>)> {
     use sha2::{Digest, Sha256};
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 65_536];
+    let mut head: Vec<u8> = Vec::new();
     loop {
         let n = file.read(&mut buf)?;
         if n == 0 {
             break;
         }
+        if head.len() < 4096 {
+            head.extend_from_slice(&buf[..n.min(4096 - head.len())]);
+        }
         hasher.update(&buf[..n]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok((format!("{:x}", hasher.finalize()), head))
 }
 
-/// Platform-specific bits. Everything here is a clean stub on non-Windows
-/// dev machines and becomes a native call in milestone M1.
+/// Platform-specific bits. Clean stubs on non-Windows dev machines; native
+/// behavior on Windows (milestone M1).
 pub mod platform {
     use std::path::PathBuf;
 
-    /// Roots used when `ScanConfig::roots` is empty.
+    /// Roots used when `ScanConfig::roots` is empty: the user profile plus
+    /// every drive letter whose root exists (no external dependency;
+    /// equivalent to GetLogicalDrives for our purposes).
     pub fn default_roots() -> Vec<PathBuf> {
         #[cfg(windows)]
         {
@@ -325,8 +348,11 @@ pub mod platform {
             if let Some(home) = std::env::var_os("USERPROFILE") {
                 v.push(PathBuf::from(home));
             }
-            if let Some(w) = std::env::var_os("WINDIR") {
-                v.push(PathBuf::from(w).join("Temp"));
+            for b in (b'A'..=b'Z').map(|b| b as char) {
+                let root = format!("{b}:\\");
+                if std::path::Path::new(&root).is_dir() {
+                    v.push(PathBuf::from(root));
+                }
             }
             v
         }
@@ -335,6 +361,59 @@ pub mod platform {
             std::env::var_os("HOME")
                 .map(|h| vec![PathBuf::from(h)])
                 .unwrap_or_default()
+        }
+    }
+
+    /// Normalized OS directory, e.g. `"c:\\windows"` (audit F5).
+    pub fn windir() -> String {
+        #[cfg(windows)]
+        {
+            std::env::var_os("WINDIR")
+                .map(|w| sc_file_models::known_paths::norm(std::path::Path::new(&w)))
+                .filter(|w| !w.is_empty())
+                .unwrap_or_else(|| "c:\\windows".to_string())
+        }
+        #[cfg(not(windows))]
+        {
+            "c:\\windows".to_string()
+        }
+    }
+
+    /// Whether the file is locked by another process (spec §3C, audit F2).
+    ///
+    /// Ground truth on Windows: a file held open by another process cannot be
+    /// renamed — so attempt a no-op rename (to a side name and back).
+    /// Process-list checks alone are not sufficient (locks exist without an
+    /// obvious owning process). On non-Windows dev machines rename is not a
+    /// lock indicator, so this reports `false`; the flag is still plumbed
+    /// end-to-end and the risk/safety hard rules are covered by unit tests.
+    pub fn is_in_use(path: &std::path::Path) -> bool {
+        #[cfg(windows)]
+        {
+            let stem = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file");
+            let probe = path.with_file_name(format!("{stem}.sc-lock-probe-{}", std::process::id()));
+            match std::fs::rename(path, &probe) {
+                Err(_) => true, // sharing violation / access denied → locked
+                Ok(()) => {
+                    // A failed rename-back would leave the user's file under a
+                    // side name — retry briefly before escalating.
+                    for _ in 0..10 {
+                        if std::fs::rename(&probe, path).is_ok() {
+                            return false;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    true
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = path;
+            false
         }
     }
 
@@ -372,6 +451,18 @@ mod tests {
     use super::*;
     use sc_file_models::ContentKind;
 
+    /// Minimal structurally-valid PE (MZ + e_lfanew + `PE\0\0` + machine).
+    fn minimal_pe() -> Vec<u8> {
+        let mut v = vec![0u8; 0x80 + 26];
+        v[0] = b'M';
+        v[1] = b'Z';
+        v[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        v[0x80..0x84].copy_from_slice(b"PE\0\0");
+        v[0x84..0x86].copy_from_slice(&0x8664u16.to_le_bytes()); // AMD64
+        v[0x80 + 24..0x80 + 26].copy_from_slice(&0x20b_u16.to_le_bytes()); // PE32+
+        v
+    }
+
     fn build_tree(tag: &str) -> PathBuf {
         // Deliberately NOT the OS temp area: the temp area itself matches the
         // temp-path heuristic on both Windows and Linux, which would pollute
@@ -388,7 +479,7 @@ mod tests {
         fs::create_dir_all(root.join("System Volume Information")).unwrap();
         fs::create_dir_all(root.join("keep-out")).unwrap();
         fs::create_dir_all(root.join("deep/a/b/c")).unwrap();
-        fs::write(root.join("downloads/old-installer.exe"), b"EXE").unwrap();
+        fs::write(root.join("downloads/old-installer.exe"), minimal_pe()).unwrap();
         fs::write(root.join("appdata/local/temp/junk.tmp"), b"JUNK").unwrap();
         fs::write(
             root.join("appdata/local/microsoft/edge/user data/default/cache/blob"),
@@ -526,6 +617,67 @@ mod tests {
         assert_eq!(
             h.sha256.as_deref(),
             Some("44bd7ae60f478fae1061e11a7739f4b94d1daf917982d33b6fc8a01a63f89c21")
+        );
+    }
+
+    // ---- M1: bytes-over-extension PE confirmation ----
+
+    #[test]
+    fn pe_extension_confirmed_from_bytes() {
+        let root = build_tree("peconfirm");
+        fs::write(root.join("real-pe.exe"), minimal_pe()).unwrap();
+        fs::write(root.join("fake.exe"), b"not a binary at all").unwrap();
+        let scanner = Scanner::new(ScanConfig {
+            roots: vec![root],
+            ..Default::default()
+        });
+        let result = scanner.scan(&mut |_| {}).unwrap();
+        let real = result
+            .records
+            .iter()
+            .find(|r| r.path.ends_with("real-pe.exe"))
+            .unwrap();
+        let fake = result
+            .records
+            .iter()
+            .find(|r| r.path.ends_with("fake.exe"))
+            .unwrap();
+        assert!(real.is_pe, "genuine PE bytes must confirm is_pe");
+        assert!(!fake.is_pe, "text with a .exe extension must not be a PE");
+    }
+
+    #[test]
+    fn deep_mode_uses_bytes_for_typing() {
+        let root = build_tree("pebytes");
+        // No extension, real PE bytes — only a byte check can catch this.
+        fs::write(root.join("renamed-malware"), minimal_pe()).unwrap();
+        let scanner = Scanner::new(ScanConfig {
+            roots: vec![root],
+            mode: ScanMode::Deep,
+            hash_max_size: Some(10_000),
+            ..Default::default()
+        });
+        let result = scanner.scan(&mut |_| {}).unwrap();
+        let m = result
+            .records
+            .iter()
+            .find(|r| r.path.ends_with("renamed-malware"))
+            .unwrap();
+        assert!(m.is_pe, "extensionless PE must be detected from bytes in deep mode");
+        assert!(m.sha256.is_some());
+    }
+
+    #[test]
+    fn in_use_is_false_for_unlocked_files() {
+        let root = build_tree("inuse");
+        let scanner = Scanner::new(ScanConfig {
+            roots: vec![root],
+            ..Default::default()
+        });
+        let result = scanner.scan(&mut |_| {}).unwrap();
+        assert!(
+            result.records.iter().all(|r| !r.in_use),
+            "no file is locked in this test environment"
         );
     }
 

@@ -614,6 +614,6 @@ mod tests {
         assert!(!is_cross_device(&IoError::from_raw_os_error(libc::EACCES)));
         assert!(!is_cross_device(&IoError::from_raw_os_error(libc::ENOENT)));
         // An io::Error without an OS code can never be EXDEV.
-        assert!(!is_cross_device(&IoError::new(io::ErrorKind::Other, "no os code")));
+        assert!(!is_cross_device(&IoError::other("no os code")));
     }
 }

@@ -16,6 +16,12 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+/// Normalized Windows directory (e.g. `"c:\\windows"`). Audit F5: Windows is
+/// not guaranteed to live on C:, so callers on Windows should fill this from
+/// `WINDIR` (the scanner's platform layer does); the default is the common
+/// case and is always safe to keep protecting.
+pub const DEFAULT_WINDIR: &str = "c:\\windows";
+
 /// What the safety engine allows for this item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -39,7 +45,7 @@ impl fmt::Display for SafetyVerdict {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SafetyPolicy {
     /// Root directory of this program itself — it never touches its own files.
     pub self_root: Option<PathBuf>,
@@ -49,6 +55,20 @@ pub struct SafetyPolicy {
     pub excluded_files: Vec<PathBuf>,
     /// Whether an AI second opinion may promote UserConfirm → AutoQuarantine.
     pub allow_ai_second_opinion: bool,
+    /// Normalized OS directory (audit F5).
+    pub windir: String,
+}
+
+impl Default for SafetyPolicy {
+    fn default() -> Self {
+        Self {
+            self_root: None,
+            excluded_roots: Vec::new(),
+            excluded_files: Vec::new(),
+            allow_ai_second_opinion: false,
+            windir: DEFAULT_WINDIR.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -89,7 +109,7 @@ pub fn enforce(
     {
         blocked.push("USER_EXCLUSION");
     }
-    if known_paths::is_windows_protected_path(&record.path) {
+    if known_paths::is_windows_protected_path(&record.path, &policy.windir) {
         blocked.push("WINDOWS_PROTECTED_PATH");
     }
     if record.is_system {
