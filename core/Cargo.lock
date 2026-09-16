@@ -285,10 +285,15 @@ dependencies = [
 name = "sc-cli"
 version = "0.1.0"
 dependencies = [
+ "fs2",
+ "rusqlite",
+ "sc-db",
  "sc-file-models",
+ "sc-quarantine",
  "sc-risk-engine",
  "sc-safety-engine",
  "sc-scanner",
+ "sha2",
 ]
 
 [[package]]

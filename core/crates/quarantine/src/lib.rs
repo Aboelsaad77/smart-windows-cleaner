@@ -77,6 +77,7 @@ pub enum VaultError {
     DestinationInvalid(PathBuf),
     HashMismatch { expected: String, actual: String },
     InsufficientSpace { needed: u64, available: u64 },
+    PreflightBlocked(String),
 }
 
 impl fmt::Display for VaultError {
@@ -106,6 +107,9 @@ impl fmt::Display for VaultError {
             }
             VaultError::InsufficientSpace { needed, available } => {
                 write!(f, "not enough space: need {needed}, have {available}")
+            }
+            VaultError::PreflightBlocked(msg) => {
+                write!(f, "quarantine pre-flight check blocked: {msg}")
             }
         }
     }
@@ -186,13 +190,54 @@ impl Vault {
         self.manifest.items.iter().find(|i| i.id == id)
     }
 
-    /// Move a file into the vault. Returns the created manifest entry.
+    /// Move a file into the vault.
     ///
-    /// Audit F4: the manifest entry is written and saved *before* the file is
-    /// moved, so a crash mid-move leaves a recoverable record instead of an
-    /// un-restorable orphan. If the move fails, the entry is rolled back and
-    /// the source is left untouched.
+    /// Even direct/lower-level quarantine calls MUST pass through the pre-flight gate.
+    /// Lower-level APIs cannot bypass the safety/preflight path.
     pub fn quarantine(&mut self, src: &Path, meta: QuarantineMeta) -> VaultResult<QuarantineItem> {
+        let policy = sc_safety_engine::SafetyPolicy::default();
+        let action = if meta.risk_band <= RiskBand::Safe {
+            RequestedAction::AutoQuarantine
+        } else {
+            RequestedAction::UserConfirmed
+        };
+        let opts = PreflightOptions::new(&policy, action).with_vault_root(&self.root);
+        if let Err(e) = preflight::revalidate(src, &opts) {
+            return match e {
+                PreflightError::SourceMissing(p) => Err(VaultError::SourceMissing(p)),
+                PreflightError::UnderVaultRoot(p) => Err(VaultError::UnderVaultRoot(p)),
+                other => Err(VaultError::PreflightBlocked(other.to_string())),
+            };
+        }
+        self.quarantine_raw(src, meta)
+    }
+
+    /// Move a file into the vault after executing the mandatory pre-flight gate.
+    ///
+    /// Re-reads metadata, rejects symlinks/reparse points/directories, probes live
+    /// process locks (`is_in_use`), checks for state drift against scan-time snapshot,
+    /// and re-runs the risk and safety policy engine immediately before moving the file.
+    pub fn quarantine_guarded(
+        &mut self,
+        src: &Path,
+        options: &PreflightOptions,
+    ) -> Result<(QuarantineItem, PreflightOutcome), GuardedQuarantineError> {
+        let mut opts = options.clone();
+        opts.vault_root = Some(&self.root);
+        let outcome = preflight::revalidate(src, &opts)?;
+        let meta = QuarantineMeta {
+            original_path: src.to_path_buf(),
+            reason: outcome.decision.notes.join("; "),
+            risk_score: outcome.assessment.score,
+            risk_band: outcome.assessment.band,
+        };
+        let item = self.quarantine_raw(src, meta)?;
+        Ok((item, outcome))
+    }
+
+    /// Internal vault ingestion logic. Private to the vault crate so callers
+    /// can never bypass the preflight safety gate.
+    fn quarantine_raw(&mut self, src: &Path, meta: QuarantineMeta) -> VaultResult<QuarantineItem> {
         if !src.is_file() {
             return Err(VaultError::SourceMissing(src.to_path_buf()));
         }
@@ -243,29 +288,6 @@ impl Vault {
             return Err(VaultError::Io(e));
         }
         Ok(item)
-    }
-
-    /// Move a file into the vault after executing the mandatory pre-flight gate.
-    ///
-    /// Re-reads metadata, rejects symlinks/reparse points/directories, probes live
-    /// process locks (`is_in_use`), checks for state drift against scan-time snapshot,
-    /// and re-runs the risk and safety policy engine immediately before moving the file.
-    pub fn quarantine_guarded(
-        &mut self,
-        src: &Path,
-        options: &PreflightOptions,
-    ) -> Result<(QuarantineItem, PreflightOutcome), GuardedQuarantineError> {
-        let mut opts = options.clone();
-        opts.vault_root = Some(&self.root);
-        let outcome = preflight::revalidate(src, &opts)?;
-        let meta = QuarantineMeta {
-            original_path: src.to_path_buf(),
-            reason: outcome.decision.notes.join("; "),
-            risk_score: outcome.assessment.score,
-            risk_band: outcome.assessment.band,
-        };
-        let item = self.quarantine(src, meta)?;
-        Ok((item, outcome))
     }
 
     /// Restore an item to its original location (spec §10, Rollback).
@@ -777,5 +799,23 @@ mod tests {
             GuardedQuarantineError::Preflight(PreflightError::SourceMissing(_))
         ));
         assert!(vault.items().is_empty());
+    }
+
+    #[test]
+    fn lower_level_quarantine_cannot_bypass_preflight_gate() {
+        let (_root, src, vault_dir) = setup("lower-level-bypass");
+        let mut vault = Vault::open(vault_dir).unwrap();
+
+        // Lock the file
+        let file = fs::OpenOptions::new().write(true).open(&src).unwrap();
+        use fs2::FileExt;
+        file.lock_exclusive().unwrap();
+
+        // Attempting to call lower-level vault.quarantine directly must still fail!
+        let err = vault.quarantine(&src, meta(&src)).unwrap_err();
+        assert!(matches!(err, VaultError::PreflightBlocked(_)));
+        assert!(src.is_file(), "file must remain untouched");
+        assert!(vault.items().is_empty(), "vault must have no entries");
+        file.unlock().unwrap();
     }
 }
