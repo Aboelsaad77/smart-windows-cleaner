@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+pub mod preflight;
+
 /// Normalized Windows directory (e.g. `"c:\\windows"`). Audit F5: Windows is
 /// not guaranteed to live on C:, so callers on Windows should fill this from
 /// `WINDIR` (the scanner's platform layer does); the default is the common
@@ -198,7 +200,7 @@ pub fn enforce(
 }
 
 /// True if `path` equals `root` or lies underneath it (case-insensitive).
-fn under(path: &Path, root: &Path) -> bool {
+pub(crate) fn under(path: &Path, root: &Path) -> bool {
     let p = known_paths::norm(path);
     let normed = known_paths::norm(root);
     let r = normed.trim_end_matches('\\');

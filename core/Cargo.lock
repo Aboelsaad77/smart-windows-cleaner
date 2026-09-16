@@ -315,6 +315,8 @@ dependencies = [
  "fs2",
  "libc",
  "sc-file-models",
+ "sc-risk-engine",
+ "sc-safety-engine",
  "serde",
  "serde_json",
  "sha2",
@@ -333,6 +335,7 @@ dependencies = [
 name = "sc-safety-engine"
 version = "0.1.0"
 dependencies = [
+ "fs2",
  "sc-file-models",
  "sc-risk-engine",
  "serde",

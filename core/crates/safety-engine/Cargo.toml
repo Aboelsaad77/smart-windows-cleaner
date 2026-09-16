@@ -7,6 +7,7 @@ authors.workspace = true
 description = "The FINAL GATE: hard safety rules that override everything, including AI"
 
 [dependencies]
+fs2 = { workspace = true }
 serde = { workspace = true }
 sc-file-models = { workspace = true }
 sc-risk-engine = { workspace = true }

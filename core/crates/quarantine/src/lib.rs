@@ -14,6 +14,9 @@
 //! ```
 
 use sc_file_models::{now_secs, RiskBand};
+pub use sc_safety_engine::preflight::{
+    self, PreflightError, PreflightOptions, PreflightOutcome, RequestedAction,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -118,6 +121,37 @@ impl From<io::Error> for VaultError {
 
 pub type VaultResult<T> = Result<T, VaultError>;
 
+#[derive(Debug)]
+pub enum GuardedQuarantineError {
+    Preflight(PreflightError),
+    Vault(VaultError),
+}
+
+impl fmt::Display for GuardedQuarantineError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GuardedQuarantineError::Preflight(e) => {
+                write!(f, "pre-flight revalidation failed: {e}")
+            }
+            GuardedQuarantineError::Vault(e) => write!(f, "vault operation failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for GuardedQuarantineError {}
+
+impl From<PreflightError> for GuardedQuarantineError {
+    fn from(e: PreflightError) -> Self {
+        GuardedQuarantineError::Preflight(e)
+    }
+}
+
+impl From<VaultError> for GuardedQuarantineError {
+    fn from(e: VaultError) -> Self {
+        GuardedQuarantineError::Vault(e)
+    }
+}
+
 pub struct Vault {
     root: PathBuf,
     manifest: Manifest,
@@ -209,6 +243,29 @@ impl Vault {
             return Err(VaultError::Io(e));
         }
         Ok(item)
+    }
+
+    /// Move a file into the vault after executing the mandatory pre-flight gate.
+    ///
+    /// Re-reads metadata, rejects symlinks/reparse points/directories, probes live
+    /// process locks (`is_in_use`), checks for state drift against scan-time snapshot,
+    /// and re-runs the risk and safety policy engine immediately before moving the file.
+    pub fn quarantine_guarded(
+        &mut self,
+        src: &Path,
+        options: &PreflightOptions,
+    ) -> Result<(QuarantineItem, PreflightOutcome), GuardedQuarantineError> {
+        let mut opts = options.clone();
+        opts.vault_root = Some(&self.root);
+        let outcome = preflight::revalidate(src, &opts)?;
+        let meta = QuarantineMeta {
+            original_path: src.to_path_buf(),
+            reason: outcome.decision.notes.join("; "),
+            risk_score: outcome.assessment.score,
+            risk_band: outcome.assessment.band,
+        };
+        let item = self.quarantine(src, meta)?;
+        Ok((item, outcome))
     }
 
     /// Restore an item to its original location (spec §10, Rollback).
@@ -615,5 +672,110 @@ mod tests {
         assert!(!is_cross_device(&IoError::from_raw_os_error(libc::ENOENT)));
         // An io::Error without an OS code can never be EXDEV.
         assert!(!is_cross_device(&IoError::other("no os code")));
+    }
+
+    // ---- Pre-flight Revalidation Gate tests ----
+
+    #[test]
+    fn quarantine_guarded_success_roundtrip() {
+        let (_root, src, vault_dir) = setup("guarded-success");
+        let mut vault = Vault::open(vault_dir).unwrap();
+        let policy = sc_safety_engine::SafetyPolicy::default();
+        let opts = PreflightOptions::new(&policy, RequestedAction::AutoQuarantine);
+
+        let (item, outcome) = vault.quarantine_guarded(&src, &opts).unwrap();
+        assert!(!src.exists());
+        assert!(item.vault_path.is_file());
+        assert_eq!(item.status, ItemStatus::Quarantined);
+        assert_eq!(
+            outcome.decision.verdict,
+            sc_safety_engine::SafetyVerdict::AutoQuarantine
+        );
+
+        let restored = vault.restore(&item.id).unwrap();
+        assert!(src.is_file());
+        assert_eq!(restored.status, ItemStatus::Restored);
+    }
+
+    #[test]
+    fn quarantine_guarded_rejects_locked_file() {
+        let (_root, src, vault_dir) = setup("guarded-locked");
+        let mut vault = Vault::open(vault_dir).unwrap();
+        let file = fs::OpenOptions::new().write(true).open(&src).unwrap();
+        use fs2::FileExt;
+        file.lock_exclusive().unwrap();
+
+        let policy = sc_safety_engine::SafetyPolicy::default();
+        let opts = PreflightOptions::new(&policy, RequestedAction::AutoQuarantine);
+        let err = vault.quarantine_guarded(&src, &opts).unwrap_err();
+
+        assert!(matches!(
+            err,
+            GuardedQuarantineError::Preflight(PreflightError::FileInUse(_))
+        ));
+        assert!(src.is_file(), "source must stay completely untouched");
+        assert!(vault.items().is_empty(), "vault manifest must have no items");
+        file.unlock().unwrap();
+    }
+
+    #[test]
+    fn quarantine_guarded_rejects_state_drift() {
+        let (_root, src, vault_dir) = setup("guarded-drift");
+        let mut vault = Vault::open(vault_dir).unwrap();
+        let scan_rec =
+            sc_file_models::FileRecord::new(src.to_string_lossy().to_string(), 11, now_secs());
+
+        // Mutate file on disk before quarantine:
+        fs::write(&src, b"modified content drastically changing size").unwrap();
+
+        let policy = sc_safety_engine::SafetyPolicy::default();
+        let opts = PreflightOptions::new(&policy, RequestedAction::AutoQuarantine)
+            .with_expected(&scan_rec);
+        let err = vault.quarantine_guarded(&src, &opts).unwrap_err();
+
+        assert!(matches!(
+            err,
+            GuardedQuarantineError::Preflight(PreflightError::StateDrift { .. })
+        ));
+        assert!(src.is_file(), "source must stay intact");
+        assert!(vault.items().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn quarantine_guarded_rejects_symlink() {
+        let (root, src, vault_dir) = setup("guarded-symlink");
+        let symlink_path = root.join("link_to_src");
+        std::os::unix::fs::symlink(&src, &symlink_path).unwrap();
+
+        let mut vault = Vault::open(vault_dir).unwrap();
+        let policy = sc_safety_engine::SafetyPolicy::default();
+        let opts = PreflightOptions::new(&policy, RequestedAction::AutoQuarantine);
+        let err = vault.quarantine_guarded(&symlink_path, &opts).unwrap_err();
+
+        assert!(matches!(
+            err,
+            GuardedQuarantineError::Preflight(PreflightError::SymlinkBlocked(_))
+        ));
+        assert!(src.is_file(), "target must remain untouched");
+        assert!(symlink_path.is_symlink());
+        assert!(vault.items().is_empty());
+    }
+
+    #[test]
+    fn quarantine_guarded_rejects_missing_file() {
+        let (_root, src, vault_dir) = setup("guarded-missing");
+        let mut vault = Vault::open(vault_dir).unwrap();
+        fs::remove_file(&src).unwrap();
+
+        let policy = sc_safety_engine::SafetyPolicy::default();
+        let opts = PreflightOptions::new(&policy, RequestedAction::AutoQuarantine);
+        let err = vault.quarantine_guarded(&src, &opts).unwrap_err();
+
+        assert!(matches!(
+            err,
+            GuardedQuarantineError::Preflight(PreflightError::SourceMissing(_))
+        ));
+        assert!(vault.items().is_empty());
     }
 }
