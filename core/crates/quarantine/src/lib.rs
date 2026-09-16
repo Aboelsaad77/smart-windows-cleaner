@@ -153,6 +153,11 @@ impl Vault {
     }
 
     /// Move a file into the vault. Returns the created manifest entry.
+    ///
+    /// Audit F4: the manifest entry is written and saved *before* the file is
+    /// moved, so a crash mid-move leaves a recoverable record instead of an
+    /// un-restorable orphan. If the move fails, the entry is rolled back and
+    /// the source is left untouched.
     pub fn quarantine(&mut self, src: &Path, meta: QuarantineMeta) -> VaultResult<QuarantineItem> {
         if !src.is_file() {
             return Err(VaultError::SourceMissing(src.to_path_buf()));
@@ -179,9 +184,8 @@ impl Vault {
         let item_dir = self.root.join(ITEMS_DIR).join(&id);
         fs::create_dir_all(&item_dir)?;
         let dest = item_dir.join(file_name);
-        move_file(src, &dest)?;
         let item = QuarantineItem {
-            id,
+            id: id.clone(),
             original_path: meta.original_path.clone(),
             vault_path: dest.clone(),
             sha256: sha,
@@ -192,8 +196,18 @@ impl Vault {
             risk_band: meta.risk_band,
             status: ItemStatus::Quarantined,
         };
+        // Pre-save: the record must exist before the file moves.
         self.manifest.items.push(item.clone());
         self.save()?;
+        if let Err(e) = move_file(src, &dest) {
+            // Roll back the manifest entry so state stays consistent.
+            if let Some(pos) = self.manifest.items.iter().position(|i| i.id == id) {
+                self.manifest.items.remove(pos);
+            }
+            let _ = fs::remove_dir_all(&item_dir);
+            let _ = self.save();
+            return Err(VaultError::Io(e));
+        }
         Ok(item)
     }
 
@@ -295,6 +309,37 @@ impl Vault {
         self.save()
     }
 
+    /// Find vault item directories that have no manifest entry — orphans left
+    /// by a crash in the move window before audit F4's pre-save, or by a
+    /// corrupted manifest. Their original path is unknown, so they cannot be
+    /// restored automatically; the UI should surface them for manual review.
+    pub fn recover_orphans(&self) -> VaultResult<Vec<PathBuf>> {
+        let mut orphans = Vec::new();
+        let items_root = self.root.join(ITEMS_DIR);
+        let known: std::collections::HashSet<&str> = self
+            .manifest
+            .items
+            .iter()
+            .map(|i| i.id.as_str())
+            .collect();
+        let rd = match fs::read_dir(&items_root) {
+            Ok(rd) => rd,
+            Err(_) => return Ok(orphans),
+        };
+        for e in rd {
+            let e = match e {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let file_name = e.file_name();
+            let name = file_name.to_string_lossy();
+            if !known.contains(name.as_ref()) {
+                orphans.push(e.path());
+            }
+        }
+        Ok(orphans)
+    }
+
     pub fn save(&self) -> VaultResult<()> {
         let raw = serde_json::to_string_pretty(&self.manifest)
             .map_err(|e| VaultError::Json(e.to_string()))?;
@@ -327,15 +372,45 @@ pub fn hash_file(path: &Path) -> VaultResult<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-/// `rename` when possible, else copy + delete (cross-device fallback).
+/// `rename` when possible; on a *cross-device* rename (EXDEV) fall back to
+/// copy + delete. Any other rename failure (sharing violation, permissions,
+/// ...) is propagated untouched — the source must stay intact.
+///
+/// Audit F3: the fallback previously matched `ErrorKind::Other`, which also
+/// covers sharing violations on some platforms; that would copy the file and
+/// then fail to delete the locked source, leaving an unrecorded duplicate.
 fn move_file(src: &Path, dest: &Path) -> io::Result<()> {
     match fs::rename(src, dest) {
         Ok(()) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::Other => {
+        Err(e) if is_cross_device(&e) => {
             fs::copy(src, dest)?;
-            fs::remove_file(src)
+            if let Err(err) = fs::remove_file(src) {
+                // Never leave an unrecorded copy behind: undo it and surface
+                // the failure.
+                let _ = fs::remove_file(dest);
+                return Err(io::Error::new(
+                    err.kind(),
+                    format!("source could not be removed after cross-device copy: {err}"),
+                ));
+            }
+            Ok(())
         }
         Err(e) => Err(e),
+    }
+}
+
+/// True only for the cross-device rename error. On Windows, std's `rename`
+/// already performs cross-volume moves (MOVEFILE_COPY_ALLOWED), so this
+/// effectively matters on Unix.
+fn is_cross_device(e: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        e.raw_os_error() == Some(libc::EXDEV)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = e;
+        false
     }
 }
 
@@ -484,5 +559,61 @@ mod tests {
         // purging twice is a clean error
         let err = vault.purge(&item.id).unwrap_err();
         assert!(matches!(err, VaultError::NotQuarantined(_)));
+    }
+
+    // ---- audit F4: manifest pre-save + rollback invariants ----
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_quarantine_leaves_no_entry_and_source_intact() {
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipping: running as root, permission bits do not apply");
+            return;
+        }
+        let (_root, src, vault_dir) = setup("rollback");
+        let mut vault = Vault::open(vault_dir.clone()).unwrap();
+        // Make the items dir read-only so item-dir creation (and any move)
+        // fails. The invariant: no manifest entry, source untouched.
+        use std::os::unix::fs::PermissionsExt;
+        let items = vault_dir.join(ITEMS_DIR);
+        fs::set_permissions(&items, fs::Permissions::from_mode(0o555)).unwrap();
+        let err = vault.quarantine(&src, meta(&src)).unwrap_err();
+        fs::set_permissions(&items, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(err, VaultError::Io(_)));
+        assert!(vault.items().is_empty(), "no manifest entry may survive a failure");
+        assert!(src.is_file(), "the source must stay intact");
+        // manifest on disk agrees with memory
+        let on_disk = Vault::open(vault_dir).unwrap();
+        assert!(on_disk.items().is_empty());
+    }
+
+    #[test]
+    fn recover_orphans_finds_unlisted_item_dirs() {
+        let (_root, src, vault_dir) = setup("orphans");
+        let mut vault = Vault::open(vault_dir.clone()).unwrap();
+        assert!(vault.recover_orphans().unwrap().is_empty());
+        // Simulate the pre-F4 crash: a file in items/<id>/ with no manifest
+        // entry.
+        let orphan = vault_dir.join(ITEMS_DIR).join("deadbeef-dead-dead-dead-deadbeefdeadbe");
+        fs::create_dir_all(&orphan).unwrap();
+        fs::write(orphan.join("leftover.tmp"), b"orphan").unwrap();
+        // A legit item should NOT be reported.
+        let item = vault.quarantine(&src, meta(&src)).unwrap();
+        let orphans = vault.recover_orphans().unwrap();
+        assert_eq!(orphans, vec![orphan.clone()]);
+        assert_ne!(item.vault_path.parent().unwrap(), orphan.as_path());
+    }
+
+    // ---- audit F3: cross-device detection is exact ----
+
+    #[cfg(unix)]
+    #[test]
+    fn is_cross_device_matches_exdev_only() {
+        use io::Error as IoError;
+        assert!(is_cross_device(&IoError::from_raw_os_error(libc::EXDEV)));
+        assert!(!is_cross_device(&IoError::from_raw_os_error(libc::EACCES)));
+        assert!(!is_cross_device(&IoError::from_raw_os_error(libc::ENOENT)));
+        // An io::Error without an OS code can never be EXDEV.
+        assert!(!is_cross_device(&IoError::new(io::ErrorKind::Other, "no os code")));
     }
 }

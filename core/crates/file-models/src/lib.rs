@@ -283,7 +283,11 @@ pub fn infer_content_kind(path: &Path) -> ContentKind {
         "db" | "sqlite" | "sqlite3" => ContentKind::Database,
         "iso" | "zip" | "rar" | "7z" | "gz" | "tar" | "cab" => ContentKind::Archive,
         "bak" | "backup" => ContentKind::Backup,
-        "cache" | "dat" | "ldat" => ContentKind::Cache,
+        // Audit F2: ".dat" is deliberately NOT mapped to Cache — many .dat
+        // files are app data (game saves, settings), and classifying them as
+        // cache by extension alone made them auto-quarantine candidates.
+        // Cache classification needs a cache-path context, not an extension.
+        "cache" | "ldat" => ContentKind::Cache,
         _ => ContentKind::Unknown,
     }
 }
@@ -373,6 +377,12 @@ mod tests {
         );
         assert_eq!(
             infer_content_kind(Path::new("C:\\x\\random.bin")),
+            ContentKind::Unknown
+        );
+        // Audit F2: .dat must NOT be classified as cache by extension alone
+        // (game saves, settings, ...). Cache needs a path context.
+        assert_eq!(
+            infer_content_kind(Path::new("D:\\Games\\GTA\\saves.dat")),
             ContentKind::Unknown
         );
     }

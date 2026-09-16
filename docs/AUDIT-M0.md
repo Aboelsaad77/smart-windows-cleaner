@@ -109,3 +109,34 @@ In M0 nothing sets `in_use`, `is_pe`, `is_driver`, `is_signed`, `is_windows_comp
 2. **F3 + F4** (robustness) — local, well-scoped, testable.
 3. **F5 + F8** — land *inside* M1 (they're M1-shaped), with F8's extension fallback possibly backported to M0.
 4. **F6 + F7** — document the contracts now, implement in M2.
+
+---
+
+## Fixes landed (2026-09-16)
+
+Status after the fix pass (55/55 tests green):
+
+- **F1 — FIXED.** Product decision (owner, 2026-09-16): `SIGNED_CRITICAL_BINARY` now fires only for
+  `is_signed && is_pe && (is_windows_component || is_driver)`. Signed userland binaries (old
+  installers, app executables) follow the risk band. New tests:
+  `signed_old_installer_is_not_never_delete` (Review → UserConfirm), `signed_driver_is_still_never_delete`.
+- **F2 — FIXED.** `"dat"` removed from the Cache extension mapping in `infer_content_kind`
+  (cache classification now requires a path context). New assertion: `saves.dat` ⇒ `Unknown`.
+- **F3 — FIXED.** `move_file` falls back to copy+delete **only** on an actual cross-device error
+  (`is_cross_device`: `EXDEV` on unix; on Windows std's rename already handles cross-volume).
+  Any other rename failure propagates untouched with the source intact; if the fallback copy
+  succeeds but the source can't be removed, the copy is deleted too. New test:
+  `is_cross_device_matches_exdev_only`.
+- **F4 — FIXED.** `Vault::quarantine` now writes and saves the manifest entry **before** the move
+  and rolls the entry back (plus item dir) if the move fails — a crash mid-move leaves a
+  recoverable record, never an un-restorable orphan. New invariant test:
+  `failed_quarantine_leaves_no_entry_and_source_intact`. Bonus: `Vault::recover_orphans()` finds
+  item dirs with no manifest entry (pre-F4 crashes / corrupted manifests) for UI surfacing.
+  New test: `recover_orphans_finds_unlisted_item_dirs`.
+- **F8 — backported.** The scanner now assumes `is_pe = true` (unsigned) for
+  `exe|dll|sys|drv` extensions until M1 parses PE headers + Authenticode — fails closed, so an
+  unanalyzed binary can never score below "review". New assertion in `smart_scan_walks_and_reports`.
+
+Remaining: **F5** (OS-drive hardcoding) and **F8** remainder (full PE/Authenticode parsing,
+`signals_available` flag) → M1. **F6** (vault.json canonical over `quarantine_items`) and **F7**
+(verdict, not band, in UI) → documented contracts for M2.

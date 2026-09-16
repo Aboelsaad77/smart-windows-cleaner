@@ -101,7 +101,14 @@ pub fn enforce(
     if record.in_use {
         blocked.push("CURRENTLY_IN_USE");
     }
-    if record.is_signed && record.is_pe {
+    // Audit F1 (product decision, 2026-09-16): only *critical* binaries are
+    // hard-blocked by their signature — OS components and drivers. A signed
+    // userland binary (e.g. an old VS installer) is not critical: it follows
+    // the risk band like any other file.
+    if record.is_signed
+        && record.is_pe
+        && (record.is_windows_component || record.is_driver)
+    {
         blocked.push("SIGNED_CRITICAL_BINARY");
     }
     if assessment.band == RiskBand::Protected {
@@ -356,5 +363,37 @@ mod tests {
         let d = enforce(&r, &a, &SafetyPolicy::default(), Some(&sig));
         assert_eq!(d.verdict, SafetyVerdict::UserConfirm);
         assert!(d.notes.join(" ").contains("AI suggests keeping"));
+    }
+
+    // ---- audit F1: signed PE is only hard-blocked when critical ----
+
+    #[test]
+    fn signed_old_installer_is_not_never_delete() {
+        let mut r = FileRecord::new(
+            "C:\\Users\\U\\Downloads\\vs-setup.exe",
+            10,
+            NOW - 400 * 86_400,
+        );
+        r.extension = Some("exe".into());
+        r.content_kind = ContentKind::Installer;
+        r.is_pe = true;
+        r.is_signed = true;
+        let a = local(&r);
+        assert_eq!(a.band, RiskBand::Review, "risk engine intent");
+        let d = enforce(&r, &a, &SafetyPolicy::default(), None);
+        assert_eq!(d.verdict, SafetyVerdict::UserConfirm);
+        assert!(!d.blocked_rules.contains(&"SIGNED_CRITICAL_BINARY"));
+    }
+
+    #[test]
+    fn signed_driver_is_still_never_delete() {
+        let mut r = FileRecord::new("C:\\Windows\\System32\\drivers\\d.sys", 10, NOW);
+        r.is_pe = true;
+        r.is_signed = true;
+        r.is_driver = true;
+        let a = local(&r);
+        let d = enforce(&r, &a, &SafetyPolicy::default(), None);
+        assert_eq!(d.verdict, SafetyVerdict::NeverDelete);
+        assert!(d.blocked_rules.contains(&"SIGNED_CRITICAL_BINARY"));
     }
 }

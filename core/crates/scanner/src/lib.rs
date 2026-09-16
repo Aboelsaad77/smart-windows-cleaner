@@ -203,6 +203,10 @@ impl Scanner {
                     continue;
                 }
                 // Regular file.
+                let ext = path
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .filter(|e| !e.is_empty());
                 let mut rec = FileRecord {
                     path: path.clone(),
                     size: meta.len(),
@@ -210,10 +214,18 @@ impl Scanner {
                     modified: to_epoch(meta.modified()),
                     created: to_opt_epoch(meta.created()),
                     accessed: to_opt_epoch(meta.accessed()),
-                    extension: path.extension().map(|e| e.to_string_lossy().to_lowercase()),
+                    extension: ext.clone(),
                     content_kind: infer_content_kind(&path),
                     is_hidden: platform::is_hidden(&path),
                     is_system: false, // M1: FILE_ATTRIBUTE_SYSTEM on Windows
+                    // Conservative M0 assumption (audit F8): until M1 parses PE
+                    // headers + Authenticode, PE-extension files are treated as
+                    // unsigned PEs — this fails closed, so an unanalyzed binary
+                    // can never score below "review".
+                    is_pe: matches!(
+                        ext.as_deref(),
+                        Some("exe") | Some("dll") | Some("sys") | Some("drv")
+                    ),
                     ..Default::default()
                 };
                 // Quick mode: known junk only.
@@ -444,6 +456,9 @@ mod tests {
             .find(|r| r.path.ends_with("old-installer.exe"))
             .unwrap();
         assert_eq!(inst.content_kind, ContentKind::Installer);
+        // Audit F8: until M1 parses PE headers, PE-extension files are
+        // assumed (unsigned) PEs — fails closed.
+        assert!(inst.is_pe);
 
         assert!(progress_calls >= 1);
         assert!(result.total_size > 0);
