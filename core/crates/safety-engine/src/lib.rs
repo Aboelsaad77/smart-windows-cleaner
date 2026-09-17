@@ -434,8 +434,10 @@ mod tests {
     fn winsxs_path_with_custom_windir_is_protected() {
         let r = FileRecord::new("D:\\Windows\\WinSxS\\amd64_somefile", 100, NOW);
         let a = local(&r);
-        let mut policy = SafetyPolicy::default();
-        policy.windir = "d:\\windows".into();
+        let policy = SafetyPolicy {
+            windir: "d:\\windows".into(),
+            ..Default::default()
+        };
         let d = enforce(&r, &a, &policy, None);
         assert_eq!(d.verdict, SafetyVerdict::NeverDelete);
         assert!(d.blocked_rules.contains(&"WINDOWS_PROTECTED_PATH"));
@@ -467,8 +469,10 @@ mod tests {
         r.is_signed = false;
         let a = synth(55); // Review
         let ai_signal = ai("QUARANTINE", 0.99);
-        let mut policy = SafetyPolicy::default();
-        policy.allow_ai_second_opinion = true;
+        let policy = SafetyPolicy {
+            allow_ai_second_opinion: true,
+            ..Default::default()
+        };
         let d = enforce(&r, &a, &policy, Some(&ai_signal));
         assert_ne!(d.verdict, SafetyVerdict::AutoQuarantine);
     }

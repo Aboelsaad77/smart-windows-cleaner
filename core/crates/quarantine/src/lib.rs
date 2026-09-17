@@ -141,6 +141,52 @@ impl From<io::Error> for VaultError {
 
 pub type VaultResult<T> = Result<T, VaultError>;
 
+/// Resolves the secure vault root directory depending on process elevation and user context.
+///
+/// Multi-Tier Security & Isolation Model:
+/// - Standard Non-Elevated User Mode: Defaults to `%LOCALAPPDATA%\SmartCleaner\Vault`.
+///   Inherits the current user's Windows profile NTFS ACLs (only the user and Administrators have access).
+///   Guarantees standard users can inspect, quarantine, and restore their own files without UAC elevation.
+///   Enforces multi-user isolation: User A cannot see or restore User B's files.
+/// - Elevated Administrator Mode: Defaults to `%PROGRAMDATA%\SmartCleaner\Vault`.
+///   Protected with explicit DACL (`SYSTEM` + `Administrators` only).
+///   Used when cleaning machine-wide system directories.
+pub fn resolve_vault_root(is_elevated: bool, custom_root: Option<PathBuf>) -> PathBuf {
+    if let Some(custom) = custom_root {
+        return custom;
+    }
+
+    #[cfg(windows)]
+    {
+        if is_elevated {
+            if let Some(progdata) = std::env::var_os("PROGRAMDATA") {
+                return PathBuf::from(progdata).join("SmartCleaner").join("Vault");
+            }
+            PathBuf::from("C:\\ProgramData\\SmartCleaner\\Vault")
+        } else {
+            if let Some(localappdata) = std::env::var_os("LOCALAPPDATA") {
+                return PathBuf::from(localappdata).join("SmartCleaner").join("Vault");
+            }
+            if let Some(userprofile) = std::env::var_os("USERPROFILE") {
+                return PathBuf::from(userprofile).join("AppData").join("Local").join("SmartCleaner").join("Vault");
+            }
+            PathBuf::from("C:\\Users\\Default\\AppData\\Local\\SmartCleaner\\Vault")
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        if is_elevated {
+            PathBuf::from("/var/lib/smart-cleaner/vault")
+        } else {
+            if let Some(home) = std::env::var_os("HOME") {
+                return PathBuf::from(home).join(".local/share/smart-cleaner/vault");
+            }
+            PathBuf::from("/tmp/smart-cleaner-vault")
+        }
+    }
+}
+
 pub struct Vault {
     root: PathBuf,
     manifest: Manifest,
@@ -750,5 +796,17 @@ mod tests {
         let mut vault = Vault::open(vault_dir.clone()).unwrap();
         let res = vault.quarantine(&vault_dir, meta(&vault_dir));
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn resolve_vault_root_respects_custom_and_elevation() {
+        let custom = PathBuf::from("/custom/vault/path");
+        assert_eq!(resolve_vault_root(false, Some(custom.clone())), custom);
+        assert_eq!(resolve_vault_root(true, Some(custom.clone())), custom);
+
+        // When custom is None, resolves differently for elevated vs non-elevated
+        let user_vault = resolve_vault_root(false, None);
+        let admin_vault = resolve_vault_root(true, None);
+        assert_ne!(user_vault, admin_vault);
     }
 }

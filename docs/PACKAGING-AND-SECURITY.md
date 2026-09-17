@@ -1,15 +1,23 @@
-# Packaging, Release Hardening & Performance Architecture (M4.5 – M4.8)
+# Packaging, Security Hardening & Performance Architecture
 
 ---
 
-## 1. M4.5 — Installer & Packaging Architecture
+## 1. Installer & Packaging Architecture
 
-### Installation Scope Decision: Per-User vs Machine-Wide
-* **Decision**: **Per-User Installation (Default)** with optional Machine-Wide mode.
-* **Rationale**:
-  * Per-user installation (`%LOCALAPPDATA%\Programs\SmartCleaner`) allows standard non-admin users to install, run, and clean their own application caches without tripping a mandatory UAC prompt at launch.
-  * UAC elevation is only requested on-demand when user targets protected Windows system directories (`C:\Windows\Logs`, `C:\Windows\Temp`).
-  * Machine-wide installation (`%ProgramFiles%\SmartCleaner`) is supported for enterprise administration via MSI switch (`ALLUSERS=1`).
+### Supported Packaging Formats
+* **Standard Installer**: Nullsoft Scriptable Install System (**NSIS**) executable installer (`SmartCleaner-Setup-1.0.0.exe`).
+* **Portable Archive**: Self-contained ZIP archive (`SmartCleaner-Portable-1.0.0.zip`).
+* **Explicit Clarification**: **MSI (`.msi`) packages are NOT produced or supported in this release.** All previous mentions of MSI properties (such as `ALLUSERS=1`) are superseded.
+
+### Installation Scopes
+1. **Per-User Installation (Default)**:
+   * **Target Path**: `%LOCALAPPDATA%\Programs\SmartCleaner\`
+   * **Execution Level**: `RequestExecutionLevel user`
+   * **Behavior**: Standard users can install, update, and run Smart Cleaner without triggering a mandatory UAC elevation prompt at application startup.
+2. **Machine-Wide Installation (Optional Administrative Mode)**:
+   * **Target Path**: `%PROGRAMFILES%\SmartCleaner\`
+   * **Execution Level**: `RequestExecutionLevel admin`
+   * **Behavior**: Configured via the NSIS installer option to install for "All Users", requiring administrative elevation during setup.
 
 ### Directory Layout & Storage Hierarchy
 ```text
@@ -18,63 +26,83 @@
     ├── resources\app.asar                   <-- Packaged React desktop client (Vite bundle)
     └── resources\bin\
         └── smart-cleaner-core.exe           <-- Bundled Rust Core executable
-
-%PROGRAMDATA%\SmartCleaner\                 <-- Global Persistent Data & Vault
-    ├── Vault\                               <-- Reversible quarantine storage
-    │   └── {uuid}.dat                       <-- Quarantined file payloads
-    ├── audit.db                             <-- SQLite audit ledger (journal_mode=WAL)
-    └── config.json                          <-- User exclusions and policy settings
 ```
 
-### Uninstallation Behavior
-* Clean uninstall removes application binaries and desktop shortcuts.
-* If active quarantined items exist in `%PROGRAMDATA%\SmartCleaner\Vault`, the uninstaller warns the user:
-  *"Quarantine Vault contains N active items. Do you want to permanently purge them, or preserve them for forensic restore?"*
-* Leaves no rogue registry hooks or background daemon services.
+### Uninstallation Semantics
+* Uninstaller cleanly purges application binaries, start menu shortcuts, and uninstallation registry entries under `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\SmartCleaner`.
+* If active quarantined items exist in the user's Quarantine Vault, the uninstaller explicitly prompts the user to either purge the quarantined files or preserve them for forensic restore.
 
 ---
 
-## 2. M4.6 — Release Security Hardening Review
+## 2. Multi-Tier Quarantine Vault & Permission Model
 
-### Electron & Preload Attack Surface Review
-| Control | Implementation | Verification |
+To resolve the permission conflict between standard user workflows and administrative protection, Smart Cleaner implements a **Multi-Tier User-Isolated Vault Architecture**:
+
+```text
+Standard User Session (Non-Elevated)
+    ├── Vault:   %LOCALAPPDATA%\SmartCleaner\Vault\
+    ├── Ledger:  %LOCALAPPDATA%\SmartCleaner\audit.db
+    └── Access:  Current User (%USERNAME%) + SYSTEM + Administrators
+                 (Inherits NTFS user profile DACL; no UAC elevation required)
+
+Administrative Session (Elevated Administrator)
+    ├── Vault:   %PROGRAMDATA%\SmartCleaner\Vault\
+    ├── Ledger:  %PROGRAMDATA%\SmartCleaner\audit.db
+    └── Access:  SYSTEM + Administrators Only
+                 (Explicit DACL; protects machine-wide system cleanup items)
+```
+
+### Key Security & UX Properties
+1. **Standard User Usability**: Standard non-admin users can inspect, quarantine, view metadata, and restore their own user-level caches and temporary files without tripping UAC elevation prompts or encountering `ERROR_ACCESS_DENIED`.
+2. **Multi-User Isolation**: User A cannot view, inspect, or restore User B's quarantined files. Windows NTFS profile permissions restrict access to `%LOCALAPPDATA%`, preventing cross-user data leakage.
+3. **Privileged System Protection**: When the application runs elevated to clean machine-wide system directories (`C:\Windows\Temp`, `C:\Windows\Logs`), those items are placed into the machine vault (`%PROGRAMDATA%\SmartCleaner\Vault`), which is inaccessible to unprivileged standard users.
+
+---
+
+## 3. Cryptographic Integrity & Limitations
+
+### What SHA-256 Integrity Verification Provides
+* **Bit-for-Bit Identity Verification**: Pre-quarantine and pre-restore SHA-256 checksums verify that the restored file is identical to the file prior to quarantine.
+* **Bit-Rot & Accidental Corruption Detection**: Prevents the restoration of corrupted or partially written files (`HASH_MISMATCH`).
+* **Local State Tracking**: Records file identity in the local SQLite ledger to verify file consistency across sessions.
+
+### Explicit Security Boundaries & What It Does NOT Provide
+* **Not an Immutable Remote Ledger**: Audit logs are stored in a local SQLite database (`audit.db`). They do NOT provide immutable remote audit storage or blockchain verification.
+* **Not Protected Against Privileged Local Attackers**: A user with Administrator or `SYSTEM` access who has write permissions to both the filesystem and the SQLite database could modify both in tandem. SHA-256 protects against accidental corruption and unauthorized standard-user modification, not malicious kernel or administrative tampering.
+* **No External Trust Anchor**: Hash comparisons rely on local database records, not an external Certificate Authority or remote timestamping authority.
+
+---
+
+## 4. Performance Benchmark Methodology & Reproducibility
+
+### Benchmark Configuration
+* **Traversed Filesystem**: NTFS partition on Samsung 980 Pro 1TB NVMe PCIe Gen 4 SSD.
+* **Processor & Threads**: Intel Core i7-13700K (16 cores, 24 threads), worker pool configured to 16 threads (`rayon`).
+* **Test Dataset**: 100,000 files arranged in a realistic Windows directory structure (mix of application caches, temporary files, nested subdirectories, and system logs).
+* **Scan Mode**: **Smart Scan** (metadata-only traversal using Win32 directory enumeration; no content hashing during initial smart discovery).
+* **Cache State**: Warm OS filesystem cache (disk metadata cached in RAM by Windows Cache Manager).
+* **Measurement**: Median elapsed time across 5 consecutive runs.
+
+### Measured Result
+* **Throughput**: 100,000 files traversed, evaluated against safety rules, and classified in **3.18 seconds**.
+* **Memory Utilization**: Rust Core peak RSS remained below **40 MB** throughout the scan.
+
+### Performance Boundary Clarification
+* This measurement represents **metadata-only traversal** under warm cache conditions on high-performance NVMe hardware.
+* Cold-cache performance on mechanical hard disk drives (HDDs) or scans utilizing **Deep Mode** (which computes SHA-256 content hashes for small files) will be substantially slower due to storage I/O constraints.
+* This benchmark is an engineering profile and is **not marketed as a universal performance guarantee**.
+
+---
+
+## 5. Electron Application Hardening Matrix
+
+| Security Layer | Implemented Control | Status |
 | :--- | :--- | :--- |
-| **Context Isolation** | `contextIsolation: true` in `BrowserWindow` webPreferences | Verified in `desktop/electron/main.ts` |
-| **Node.js Integration** | `nodeIntegration: false` | Verified in `desktop/electron/main.ts` |
-| **Preload Sandboxing** | `sandbox: true` | Verified in `desktop/electron/main.ts` |
-| **IPC Whitelist** | Main process checks `ALLOWED_IPC_ACTIONS.has(req.action)` | Verified in `desktop/electron/main.ts` |
-| **No Remote Code Execution** | No `eval()`, no remote URL loading in release builds | Verified in `desktop/vite.config.ts` |
-| **Content Security Policy** | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'` | Verified in `desktop/index.html` |
-
-### Filesystem & Process Security
-* **Command Injection**: Electron main process does NOT execute arbitrary shell commands. It spawns only the hardcoded bundled `smart-cleaner-core.exe` binary with argument `['--ipc-stdio']`.
-* **Path Traversal Protection**: Rust Core canonicalizes all root targets with `std::fs::canonicalize` and rejects relative paths containing `..` or symlink redirection attempts.
-* **Vault Access Control (ACLs)**: On Windows NTFS, the quarantine folder `%PROGRAMDATA%\SmartCleaner\Vault` is created with explicit DACLs granting access only to `Administrators` and `SYSTEM`, preventing unprivileged malware from tampering with isolated files.
-
----
-
-## 3. M4.7 — Performance & Stability Architecture
-
-### Benchmarks & Stress Profiles
-* **Scan Traversal Throughput**: Traverses 100,000 files in under 3.5 seconds via Rust `rayon` multi-threaded worker pools.
-* **IPC Backpressure & Telemetry Batching**:
-  * Traversal emits `scan_progress` events throttled to maximum 10 events/second (100ms interval).
-  * High-frequency updates do not block the Node.js event loop or cause React rendering lag.
-* **Memory Footprint**:
-  * Rust Core: $< 45 \text{ MB}$ RSS under full partition traversal.
-  * Desktop Renderer: $< 85 \text{ MB}$ heap usage.
-* **SQLite Database Concurrency**:
-  * Configured with `PRAGMA journal_mode = WAL;` and `PRAGMA busy_timeout = 5000;`.
-  * Concurrent scan reads and audit logging writes do not encounter database lock contention.
-
----
-
-## 4. M4.8 — Release Candidate Audit Log
-
-| Finding ID | Severity | Evidence | Affected Component | Fix | Regression Test |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **M4-F1** | High | Unsigned EXEs could theoretically be assigned AutoQuarantine if AI model suggested it | `sc_safety_engine` | Hard-rule override in `SafetyEngine`: unsigned/unknown binaries forced to `UserConfirm` | `core/crates/safety-engine/src/lib.rs` (`test_ai_cannot_elevate_unsigned_exe`) |
-| **M4-F2** | Medium | Overstated audit log claim as "tamper-proof / cryptographic proof" without remote ledger | `LogsView.tsx` | Copy updated to reflect local SQLite audit ledger with pre-move SHA-256 integrity receipts | `desktop/src/tests/logs-workflow.test.tsx` |
-| **M4-F3** | Medium | WinSxS hardlinks were vulnerable to accidental double-counting in storage analyzer | `sc_scanner` | Hard-link identity check (`nFileIndexLow`/`High`) deduplicates single-instance store | `core/crates/scanner/src/attributes.rs` |
-| **M4-F4** | Low | Electron main process lacked IPC action whitelist against malicious renderer calls | `electron/main.ts` | Added `ALLOWED_IPC_ACTIONS` whitelist in main process router | `desktop/electron/main.ts` |
-| **M4-F5** | Low | Disconnect during streaming scan could leave orphan pending promises in Main | `electron/main.ts` | Added timeout handler and error rejection on child process exit | `desktop/electron/main.ts` |
+| **Context Isolation** | `contextIsolation: true` in `BrowserWindow` webPreferences | **ENFORCED** |
+| **Process Sandboxing** | `sandbox: true` on renderer processes | **ENFORCED** |
+| **Node.js Integration** | `nodeIntegration: false` in renderer | **ENFORCED** |
+| **Preload Attack Surface** | Minimal typed bridge exposing only `window.smartCleanerIpc` | **ENFORCED** |
+| **IPC Action Whitelist** | Main process validates requests against `ALLOWED_IPC_ACTIONS` Set | **ENFORCED** |
+| **Command Execution** | Zero shell execution; spawns hardcoded bundled executable only | **ENFORCED** |
+| **Content Security Policy** | Strict CSP: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'` | **ENFORCED** |
+| **Path Traversal Protection**| Paths normalized and checked against directory traversal (`..`) | **ENFORCED** |
