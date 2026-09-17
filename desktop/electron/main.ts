@@ -3,10 +3,13 @@ import * as path from 'path';
 import * as child_process from 'child_process';
 import * as readline from 'readline';
 import { IpcRequest, IpcResponse, IpcEvent } from '../src/types/ipc';
+import { SecureAutoUpdater } from './updater';
+import { UpdateChannel } from '../src/types/updater';
+import { LicensingEngine } from './licensing';
 
 let mainWindow: BrowserWindow | null = null;
 
-// Whitelist of valid IPC actions from renderer (Security Hardening M4.6)
+// Whitelist of valid IPC actions from renderer (Security Hardening M4.6 & Stage 2)
 const ALLOWED_IPC_ACTIONS = new Set<string>([
   'ping',
   'get_system_status',
@@ -27,7 +30,39 @@ const ALLOWED_IPC_ACTIONS = new Set<string>([
   'purge_quarantine_item',
   'request_analysis',
   'request_elevation',
+  // Secure Auto-Updater Actions (Stage 2)
+  'updater_get_status',
+  'updater_check_for_updates',
+  'updater_download_update',
+  'updater_apply_update',
+  'updater_set_channel',
+  'updater_cancel',
+  // Licensing & Entitlements Actions (Stage 3)
+  'licensing_get_status',
+  'licensing_activate_manual',
+  'licensing_start_device_auth',
+  'licensing_poll_device_auth',
+  'licensing_deactivate',
 ]);
+
+// Stage 3 Licensing Engine
+const licensingEngine = new LicensingEngine();
+
+// Runtime Safety Engine State Tracking for Deferred Updates
+let isScanActive = false;
+let activeQuarantineOps = 0;
+
+const autoUpdater = new SecureAutoUpdater({
+  currentVersion: '1.0.0',
+  defaultChannel: 'stable',
+  eventBroadcaster: (event) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('smart-cleaner:event', event as IpcEvent);
+    }
+  },
+});
+
+autoUpdater.setEngineBusyProvider(() => isScanActive || activeQuarantineOps > 0);
 
 class RustCoreBridge {
   private child: child_process.ChildProcess | null = null;
@@ -134,6 +169,13 @@ class RustCoreBridge {
 
       // 2. Is this an asynchronous IPC Event streamed from Core?
       if (parsed && typeof parsed === 'object' && (parsed.type || parsed.event)) {
+        const evtType = parsed.type || parsed.event;
+        if (evtType === 'scan_started') {
+          isScanActive = true;
+        } else if (evtType === 'scan_completed' || evtType === 'scan_cancelled') {
+          isScanActive = false;
+        }
+
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('smart-cleaner:event', parsed as IpcEvent);
         }
@@ -268,6 +310,112 @@ ipcMain.handle('smart-cleaner:ipc', async (_event, request: IpcRequest): Promise
     };
   }
 
+  // Intercept and handle Secure Auto-Updater actions in Electron main process
+  if (request.action.startsWith('updater_')) {
+    try {
+      switch (request.action) {
+        case 'updater_get_status':
+          return { id: request.id, status: 'ok', data: autoUpdater.getStatus() };
+        case 'updater_check_for_updates': {
+          const payload = request.payload as { manifestUrl?: string } | undefined;
+          const status = await autoUpdater.checkForUpdates({ manifestUrlOverride: payload?.manifestUrl });
+          return { id: request.id, status: 'ok', data: status };
+        }
+        case 'updater_download_update': {
+          const status = await autoUpdater.downloadUpdate();
+          return { id: request.id, status: 'ok', data: status };
+        }
+        case 'updater_apply_update': {
+          const payload = request.payload as { confirm?: boolean } | undefined;
+          const result = await autoUpdater.applyUpdate({
+            confirm: Boolean(payload?.confirm),
+            onApplySpawn: () => {
+              app.quit();
+            },
+          });
+          return { id: request.id, status: 'ok', data: result };
+        }
+        case 'updater_set_channel': {
+          const payload = request.payload as { channel: UpdateChannel };
+          const status = autoUpdater.setChannel(payload.channel);
+          return { id: request.id, status: 'ok', data: status };
+        }
+        case 'updater_cancel': {
+          const status = autoUpdater.cancel();
+          return { id: request.id, status: 'ok', data: status };
+        }
+        default:
+          return {
+            id: request.id,
+            status: 'error',
+            error: { code: 'UNSUPPORTED_CAPABILITY', message: `Updater action '${request.action}' not recognized` },
+          };
+      }
+    } catch (updaterErr: unknown) {
+      return {
+        id: request.id,
+        status: 'error',
+        error: {
+          code: 'UPDATER_ERROR',
+          message: updaterErr instanceof Error ? updaterErr.message : String(updaterErr),
+        },
+      };
+    }
+  }
+
+  // Intercept and handle Licensing & Entitlement actions in Electron main process
+  if (request.action.startsWith('licensing_')) {
+    try {
+      switch (request.action) {
+        case 'licensing_get_status':
+          return { id: request.id, status: 'ok', data: licensingEngine.getStatus() };
+        case 'licensing_activate_manual': {
+          const payload = request.payload as { token: string };
+          const status = licensingEngine.activateManual(payload.token);
+          return { id: request.id, status: 'ok', data: status };
+        }
+        case 'licensing_start_device_auth': {
+          const res = licensingEngine.startDeviceAuth();
+          return { id: request.id, status: 'ok', data: res };
+        }
+        case 'licensing_poll_device_auth': {
+          const payload = request.payload as { device_code: string };
+          const res = licensingEngine.pollDeviceAuth(payload.device_code);
+          return { id: request.id, status: 'ok', data: res };
+        }
+        case 'licensing_deactivate': {
+          const status = licensingEngine.deactivate();
+          return { id: request.id, status: 'ok', data: status };
+        }
+        default:
+          return {
+            id: request.id,
+            status: 'error',
+            error: { code: 'UNSUPPORTED_CAPABILITY', message: `Licensing action '${request.action}' not recognized` },
+          };
+      }
+    } catch (licErr: unknown) {
+      return {
+        id: request.id,
+        status: 'error',
+        error: {
+          code: 'LICENSING_ERROR',
+          message: licErr instanceof Error ? licErr.message : String(licErr),
+        },
+      };
+    }
+  }
+
+  // Track active operations for runtime safety gate
+  const isQuarantineOp =
+    request.action === 'quarantine_selected' ||
+    request.action === 'restore_quarantine_item' ||
+    request.action === 'purge_quarantine_item';
+
+  if (isQuarantineOp) {
+    activeQuarantineOps++;
+  }
+
   try {
     return await coreBridge.send(request);
   } catch (err: unknown) {
@@ -279,6 +427,10 @@ ipcMain.handle('smart-cleaner:ipc', async (_event, request: IpcRequest): Promise
         message: err instanceof Error ? err.message : 'Unknown IPC communication error',
       },
     };
+  } finally {
+    if (isQuarantineOp) {
+      activeQuarantineOps = Math.max(0, activeQuarantineOps - 1);
+    }
   }
 });
 

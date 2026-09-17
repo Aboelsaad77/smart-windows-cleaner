@@ -198,6 +198,9 @@ export interface SelectionSummaryDto {
   can_quarantine_all: boolean;
 }
 
+export * from './updater';
+export * from './licensing';
+
 // --- Streaming Events ---
 
 export type IpcEvent =
@@ -221,7 +224,10 @@ export type IpcEvent =
   | { type: 'quarantine_completed'; result: QuarantineOperationResultDto }
   | { type: 'restore_completed'; item_id: string; restored_to: string }
   | { type: 'elevation_required'; reason: string; action_attempted: string }
-  | { type: 'diagnostic_message'; level: 'info' | 'warn' | 'error'; message: string };
+  | { type: 'diagnostic_message'; level: 'info' | 'warn' | 'error'; message: string }
+  | { type: 'updater_status_changed'; status: import('./updater').UpdateStatusDto }
+  | { type: 'updater_progress'; percent: number; bytes_transferred: number; total_bytes: number }
+  | { type: 'updater_error'; code: string; message: string };
 
 // --- Request Payloads ---
 

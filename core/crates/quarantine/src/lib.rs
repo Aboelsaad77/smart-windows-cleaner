@@ -25,8 +25,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 pub use sc_safety_engine::preflight::{
-    PreflightError as ExportedPreflightError,
-    PreflightOptions as ExportedPreflightOptions,
+    PreflightError as ExportedPreflightError, PreflightOptions as ExportedPreflightOptions,
     RequestedAction as ExportedRequestedAction,
 };
 
@@ -184,10 +183,16 @@ pub fn resolve_vault_root(is_elevated: bool, custom_root: Option<PathBuf>) -> Pa
             PathBuf::from("C:\\ProgramData\\SmartCleaner\\Vault")
         } else {
             if let Some(localappdata) = std::env::var_os("LOCALAPPDATA") {
-                return PathBuf::from(localappdata).join("SmartCleaner").join("Vault");
+                return PathBuf::from(localappdata)
+                    .join("SmartCleaner")
+                    .join("Vault");
             }
             if let Some(userprofile) = std::env::var_os("USERPROFILE") {
-                return PathBuf::from(userprofile).join("AppData").join("Local").join("SmartCleaner").join("Vault");
+                return PathBuf::from(userprofile)
+                    .join("AppData")
+                    .join("Local")
+                    .join("SmartCleaner")
+                    .join("Vault");
             }
             PathBuf::from("C:\\Users\\Default\\AppData\\Local\\SmartCleaner\\Vault")
         }
@@ -294,7 +299,9 @@ impl Vault {
         if let Ok(f) = fs::File::open(src) {
             use fs2::FileExt;
             if f.try_lock_exclusive().is_err() {
-                return Err(VaultError::PreflightBlocked("file is currently locked or in use".into()));
+                return Err(VaultError::PreflightBlocked(
+                    "file is currently locked or in use".into(),
+                ));
             }
         }
         // The vault can never swallow itself.
@@ -451,12 +458,8 @@ impl Vault {
     pub fn recover_orphans(&self) -> VaultResult<Vec<PathBuf>> {
         let mut orphans = Vec::new();
         let items_root = self.root.join(ITEMS_DIR);
-        let known: std::collections::HashSet<&str> = self
-            .manifest
-            .items
-            .iter()
-            .map(|i| i.id.as_str())
-            .collect();
+        let known: std::collections::HashSet<&str> =
+            self.manifest.items.iter().map(|i| i.id.as_str()).collect();
         let rd = match fs::read_dir(&items_root) {
             Ok(rd) => rd,
             Err(_) => return Ok(orphans),
@@ -698,7 +701,10 @@ mod tests {
         let err = vault.quarantine(&src, meta(&src)).unwrap_err();
         fs::set_permissions(&items, fs::Permissions::from_mode(0o755)).unwrap();
         assert!(matches!(err, VaultError::Io(_)));
-        assert!(vault.items().is_empty(), "no manifest entry may survive a failure");
+        assert!(
+            vault.items().is_empty(),
+            "no manifest entry may survive a failure"
+        );
         assert!(src.is_file(), "the source must stay intact");
         let on_disk = Vault::open(vault_dir).unwrap();
         assert!(on_disk.items().is_empty());
@@ -709,7 +715,9 @@ mod tests {
         let (_root, src, vault_dir) = setup("orphans");
         let mut vault = Vault::open(vault_dir.clone()).unwrap();
         assert!(vault.recover_orphans().unwrap().is_empty());
-        let orphan = vault_dir.join(ITEMS_DIR).join("deadbeef-dead-dead-dead-deadbeefdeadbe");
+        let orphan = vault_dir
+            .join(ITEMS_DIR)
+            .join("deadbeef-dead-dead-dead-deadbeefdeadbe");
         fs::create_dir_all(&orphan).unwrap();
         fs::write(orphan.join("leftover.tmp"), b"orphan").unwrap();
         let item = vault.quarantine(&src, meta(&src)).unwrap();
@@ -738,7 +746,10 @@ mod tests {
         assert_eq!(item.status, ItemStatus::Quarantined);
         assert!(item.vault_path.is_file());
         assert!(!src.exists());
-        assert_eq!(outcome.decision.verdict, sc_safety_engine::SafetyVerdict::AutoQuarantine);
+        assert_eq!(
+            outcome.decision.verdict,
+            sc_safety_engine::SafetyVerdict::AutoQuarantine
+        );
     }
 
     #[test]
@@ -866,7 +877,10 @@ mod tests {
 
         // Verify source removed and outcome valid
         assert!(!src.exists());
-        assert_eq!(outcome.decision.verdict, sc_safety_engine::SafetyVerdict::AutoQuarantine);
+        assert_eq!(
+            outcome.decision.verdict,
+            sc_safety_engine::SafetyVerdict::AutoQuarantine
+        );
 
         // 4. Vault properties
         assert!(item.vault_path.is_file());

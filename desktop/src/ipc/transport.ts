@@ -324,5 +324,221 @@ export class MockTransport implements IpcTransport {
         data: { elevated: true },
       };
     });
+
+    // --- Mock Updater Handlers (Stage 2) ---
+    this.mockResponses.set('updater_get_status', (req) => ({
+      id: req.id,
+      status: 'ok',
+      data: {
+        state: 'idle',
+        current_version: '1.0.0',
+        channel: 'stable',
+        is_portable: false,
+        available_update: null,
+        download_progress: null,
+        downloaded_file_path: null,
+        deferred_reason: null,
+        error: null,
+        last_checked_at: null,
+      },
+    }));
+
+    this.mockResponses.set('updater_check_for_updates', (req) => ({
+      id: req.id,
+      status: 'ok',
+      data: {
+        state: 'available',
+        current_version: '1.0.0',
+        channel: 'stable',
+        is_portable: false,
+        available_update: {
+          version: '1.1.0',
+          channel: 'stable',
+          release_date: '2026-09-18T12:00:00Z',
+          architecture: 'x64',
+          artifact_filename: 'SmartCleaner-Setup-1.1.0.exe',
+          artifact_size: 85123400,
+          sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+          sha512: 'cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e',
+          download_url: 'https://github.com/Aboelsaad77/smart-windows-cleaner/releases/download/v1.1.0/SmartCleaner-Setup-1.1.0.exe',
+          release_notes: 'Performance improvements and bug fixes',
+          kid: 'smartcleaner-release-2026-1',
+        },
+        download_progress: null,
+        downloaded_file_path: null,
+        deferred_reason: null,
+        error: null,
+        last_checked_at: new Date().toISOString(),
+      },
+    }));
+
+    this.mockResponses.set('updater_download_update', (req) => ({
+      id: req.id,
+      status: 'ok',
+      data: {
+        state: 'downloaded',
+        current_version: '1.0.0',
+        channel: 'stable',
+        is_portable: false,
+        available_update: {
+          version: '1.1.0',
+          channel: 'stable',
+          release_date: '2026-09-18T12:00:00Z',
+          architecture: 'x64',
+          artifact_filename: 'SmartCleaner-Setup-1.1.0.exe',
+          artifact_size: 85123400,
+          sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+          sha512: 'cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e',
+          download_url: 'https://github.com/Aboelsaad77/smart-windows-cleaner/releases/download/v1.1.0/SmartCleaner-Setup-1.1.0.exe',
+          release_notes: 'Performance improvements and bug fixes',
+          kid: 'smartcleaner-release-2026-1',
+        },
+        download_progress: { percent: 100, bytes_transferred: 85123400, total_bytes: 85123400 },
+        downloaded_file_path: 'C:\\Users\\Mock\\AppData\\Local\\Temp\\smart-cleaner-updater\\SmartCleaner-Setup-1.1.0.exe',
+        deferred_reason: null,
+        error: null,
+        last_checked_at: new Date().toISOString(),
+      },
+    }));
+
+    this.mockResponses.set('updater_apply_update', (req) => {
+      const payload = req.payload as { confirm?: boolean } | undefined;
+      if (!payload?.confirm) {
+        return {
+          id: req.id,
+          status: 'error',
+          error: {
+            code: 'CONFIRMATION_REQUIRED',
+            message: 'User confirmation is strictly required to apply an update',
+          },
+        };
+      }
+      return {
+        id: req.id,
+        status: 'ok',
+        data: { applied: true, deferred: false },
+      };
+    });
+
+    this.mockResponses.set('updater_set_channel', (req) => {
+      const payload = req.payload as { channel: string } | undefined;
+      return {
+        id: req.id,
+        status: 'ok',
+        data: {
+          state: 'idle',
+          current_version: '1.0.0',
+          channel: payload?.channel || 'stable',
+          is_portable: false,
+          available_update: null,
+          download_progress: null,
+          downloaded_file_path: null,
+          deferred_reason: null,
+          error: null,
+          last_checked_at: null,
+        },
+      };
+    });
+
+    this.mockResponses.set('updater_cancel', (req) => ({
+      id: req.id,
+      status: 'ok',
+      data: {
+        state: 'available',
+        current_version: '1.0.0',
+        channel: 'stable',
+        is_portable: false,
+        available_update: null,
+        download_progress: null,
+        downloaded_file_path: null,
+        deferred_reason: null,
+        error: null,
+        last_checked_at: null,
+      },
+    }));
+
+    // --- Mock Licensing Handlers (Stage 3) ---
+    this.mockResponses.set('licensing_get_status', (req) => ({
+      id: req.id,
+      status: 'ok',
+      data: {
+        plan: 'community',
+        is_active: true,
+        is_in_grace_period: false,
+        account_email: null,
+        license_id: null,
+        expires_at: null,
+        grace_until: null,
+        entitlements: [],
+        device_id: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        clock_rollback_detected: false,
+        last_verified_at: null,
+        error: null,
+      },
+    }));
+
+    this.mockResponses.set('licensing_activate_manual', (req) => {
+      const payload = req.payload as { token: string } | undefined;
+      const isPro = payload?.token && payload.token.includes('pro');
+      return {
+        id: req.id,
+        status: 'ok',
+        data: {
+          plan: isPro ? 'pro' : 'community',
+          is_active: true,
+          is_in_grace_period: false,
+          account_email: 'user@example.com',
+          license_id: 'lic-pro-mock-1',
+          expires_at: '2027-09-18T12:00:00Z',
+          grace_until: '2027-10-02T12:00:00Z',
+          entitlements: isPro
+            ? ['pro.deep_forensics', 'pro.scheduled_scans', 'pro.advanced_reporting']
+            : [],
+          device_id: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+          clock_rollback_detected: false,
+          last_verified_at: new Date().toISOString(),
+          error: null,
+        },
+      };
+    });
+
+    this.mockResponses.set('licensing_start_device_auth', (req) => ({
+      id: req.id,
+      status: 'ok',
+      data: {
+        device_code: 'mock-dev-code-12345',
+        user_code: 'WDNR-8492',
+        verification_uri: 'https://smartcleaner.app/activate',
+        expires_in: 900,
+        interval: 5,
+      },
+    }));
+
+    this.mockResponses.set('licensing_poll_device_auth', (req) => ({
+      id: req.id,
+      status: 'ok',
+      data: {
+        status: 'authorized',
+      },
+    }));
+
+    this.mockResponses.set('licensing_deactivate', (req) => ({
+      id: req.id,
+      status: 'ok',
+      data: {
+        plan: 'community',
+        is_active: true,
+        is_in_grace_period: false,
+        account_email: null,
+        license_id: null,
+        expires_at: null,
+        grace_until: null,
+        entitlements: [],
+        device_id: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        clock_rollback_detected: false,
+        last_verified_at: null,
+        error: null,
+      },
+    }));
   }
 }

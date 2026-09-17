@@ -1,0 +1,42 @@
+appId: com.smartcleaner.app
+productName: SmartCleaner
+copyright: Copyright © 2026 Abdelrahman Aboelsaad
+
+directories:
+  output: dist-release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+
+extraResources:
+  - from: ../core/target/release
+    to: bin
+    filter:
+      - smart-cleaner-core
+      - smart-cleaner-core.exe
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+  executableName: SmartCleaner
+  artifactName: SmartCleaner-Portable-${version}.${ext}
+
+nsis:
+  artifactName: SmartCleaner-Setup-${version}.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+  shortcutName: Smart Cleaner
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  uninstallDisplayName: Smart Cleaner
+  runAfterFinish: true

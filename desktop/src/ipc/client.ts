@@ -16,6 +16,11 @@ import {
   StartScanCommand,
   SelectionSummaryDto,
   QuarantineOperationResultDto,
+  UpdateStatusDto,
+  UpdateChannel,
+  LicenseStatusDto,
+  DeviceAuthResponseDto,
+  DeviceAuthPollResultDto,
 } from '../types/ipc';
 import { IpcTransport, ElectronTransport, MockTransport } from './transport';
 
@@ -256,5 +261,61 @@ export class IpcClient {
 
   public async saveSettings(settings: SettingsDto): Promise<SettingsDto> {
     return this.invoke<{ settings: SettingsDto }, SettingsDto>('save_settings', { settings });
+  }
+
+  // --- Strongly-typed Updater Methods (Stage 2) ---
+
+  public async updaterGetStatus(): Promise<UpdateStatusDto> {
+    return this.invoke<null, UpdateStatusDto>('updater_get_status', null);
+  }
+
+  public async updaterCheckForUpdates(manifestUrl?: string): Promise<UpdateStatusDto> {
+    return this.invoke<{ manifestUrl?: string } | null, UpdateStatusDto>(
+      'updater_check_for_updates',
+      manifestUrl ? { manifestUrl } : null
+    );
+  }
+
+  public async updaterDownloadUpdate(): Promise<UpdateStatusDto> {
+    return this.invoke<null, UpdateStatusDto>('updater_download_update', null);
+  }
+
+  public async updaterApplyUpdate(confirm: boolean): Promise<{ applied: boolean; deferred: boolean; reason?: string }> {
+    return this.invoke<{ confirm: boolean }, { applied: boolean; deferred: boolean; reason?: string }>(
+      'updater_apply_update',
+      { confirm }
+    );
+  }
+
+  public async updaterSetChannel(channel: UpdateChannel): Promise<UpdateStatusDto> {
+    return this.invoke<{ channel: UpdateChannel }, UpdateStatusDto>('updater_set_channel', { channel });
+  }
+
+  public async updaterCancel(): Promise<UpdateStatusDto> {
+    return this.invoke<null, UpdateStatusDto>('updater_cancel', null);
+  }
+
+  // --- Strongly-typed Licensing Methods (Stage 3) ---
+
+  public async licensingGetStatus(): Promise<LicenseStatusDto> {
+    return this.invoke<null, LicenseStatusDto>('licensing_get_status', null);
+  }
+
+  public async licensingActivateManual(token: string): Promise<LicenseStatusDto> {
+    return this.invoke<{ token: string }, LicenseStatusDto>('licensing_activate_manual', { token });
+  }
+
+  public async licensingStartDeviceAuth(): Promise<DeviceAuthResponseDto> {
+    return this.invoke<null, DeviceAuthResponseDto>('licensing_start_device_auth', null);
+  }
+
+  public async licensingPollDeviceAuth(deviceCode: string): Promise<DeviceAuthPollResultDto> {
+    return this.invoke<{ device_code: string }, DeviceAuthPollResultDto>('licensing_poll_device_auth', {
+      device_code: deviceCode,
+    });
+  }
+
+  public async licensingDeactivate(): Promise<LicenseStatusDto> {
+    return this.invoke<null, LicenseStatusDto>('licensing_deactivate', null);
   }
 }

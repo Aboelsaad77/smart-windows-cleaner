@@ -54,7 +54,7 @@ export const AppHeader: React.FC = () => {
               fontFamily: 'monospace',
             }}
           >
-            v1.0 (Core Native)
+            v1.0.0 (Core Native)
           </span>
         </div>
       </div>

@@ -8,15 +8,15 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub mod ipc;
 pub mod rules;
 pub mod signature;
 pub mod software;
-pub mod ipc;
 
+pub use ipc::*;
 pub use rules::*;
 pub use signature::*;
 pub use software::*;
-pub use ipc::*;
 
 /// Coarse class of a scanned item.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -361,8 +361,7 @@ pub mod pe {
         if data.len() < 0x40 || &data[0..2] != b"MZ" {
             return info;
         }
-        let pe_off =
-            u32::from_le_bytes([data[0x3c], data[0x3d], data[0x3e], data[0x3f]]) as usize;
+        let pe_off = u32::from_le_bytes([data[0x3c], data[0x3d], data[0x3e], data[0x3f]]) as usize;
         // The PE signature + COFF machine + optional-header magic must be
         // inside the window we were given, and at a sane offset.
         if pe_off >= 0x1000 || data.len() < pe_off + 26 {
@@ -372,10 +371,9 @@ pub mod pe {
             return info;
         }
         info.is_pe = true;
-        info.machine =
-            Some(u16::from_le_bytes([data[pe_off + 4], data[pe_off + 5]]));
-        info.is_pe32 = Some(u16::from_le_bytes([data[pe_off + 24], data[pe_off + 25]])
-            == PE32_MAGIC);
+        info.machine = Some(u16::from_le_bytes([data[pe_off + 4], data[pe_off + 5]]));
+        info.is_pe32 =
+            Some(u16::from_le_bytes([data[pe_off + 24], data[pe_off + 25]]) == PE32_MAGIC);
         info
     }
 }
@@ -632,7 +630,10 @@ mod tests {
 
     #[test]
     fn windows_attributes_extensible_flags() {
-        let raw = WindowsAttributes::READONLY | WindowsAttributes::ARCHIVE | WindowsAttributes::TEMPORARY | WindowsAttributes::REPARSE_POINT;
+        let raw = WindowsAttributes::READONLY
+            | WindowsAttributes::ARCHIVE
+            | WindowsAttributes::TEMPORARY
+            | WindowsAttributes::REPARSE_POINT;
         let attr = WindowsAttributes::from_raw(raw);
         assert!(attr.is_readonly);
         assert!(attr.is_archive);
@@ -667,7 +668,12 @@ mod tests {
 
     #[test]
     fn signature_model_signed_invalid_baddigest() {
-        let s = SignatureInfo::signed_invalid(TrustStatus::BadDigest, Some(0x80096010), "Bad digest", Some("Untrusted".into()));
+        let s = SignatureInfo::signed_invalid(
+            TrustStatus::BadDigest,
+            Some(0x80096010),
+            "Bad digest",
+            Some("Untrusted".into()),
+        );
         assert!(s.is_pe);
         assert!(!s.is_signed_valid());
         assert!(s.has_signature());
@@ -729,7 +735,9 @@ mod tests {
 
     #[test]
     fn attribution_confidence_ordering_and_authoritativeness() {
-        assert!(AttributionConfidence::ExactInstallLocation > AttributionConfidence::ExecutableMatch);
+        assert!(
+            AttributionConfidence::ExactInstallLocation > AttributionConfidence::ExecutableMatch
+        );
         assert!(AttributionConfidence::ExecutableMatch > AttributionConfidence::StrongPathMatch);
         assert!(AttributionConfidence::StrongPathMatch > AttributionConfidence::WeakHeuristic);
         assert!(AttributionConfidence::WeakHeuristic > AttributionConfidence::Unknown);
@@ -832,7 +840,10 @@ mod tests {
     #[test]
     fn rule_category_labels_and_winsxs_evidence() {
         assert_eq!(RuleCategory::WindowsTemp.label(), "WINDOWS_TEMP");
-        assert_eq!(RuleCategory::WinSxSComponentStore.label(), "WINSXS_COMPONENT_STORE");
+        assert_eq!(
+            RuleCategory::WinSxSComponentStore.label(),
+            "WINSXS_COMPONENT_STORE"
+        );
         let evidence = RuleEvidence {
             rule_id: "WINSXS_STORE".into(),
             category: RuleCategory::WinSxSComponentStore,
@@ -848,7 +859,10 @@ mod tests {
     #[test]
     fn signature_info_has_signature_matrix() {
         assert!(SignatureInfo::signed_valid(None).has_signature());
-        assert!(SignatureInfo::signed_invalid(TrustStatus::Expired, Some(1), "Expired", None).has_signature());
+        assert!(
+            SignatureInfo::signed_invalid(TrustStatus::Expired, Some(1), "Expired", None)
+                .has_signature()
+        );
         let unknown = SignatureInfo {
             status: SignatureStatus::SignedUnknown,
             is_pe: true,

@@ -50,7 +50,10 @@ impl std::fmt::Display for RegistryError {
                 write!(f, "Registry OS error 0x{code:08X}: {message}")
             }
             RegistryError::UnsupportedPlatform => {
-                write!(f, "Windows registry operations unsupported on this platform")
+                write!(
+                    f,
+                    "Windows registry operations unsupported on this platform"
+                )
             }
         }
     }
@@ -235,7 +238,10 @@ impl SoftwareCatalog {
         // Tier 1: ExactInstallLocation
         for app in &self.records {
             if let Some(install_loc) = &app.install_location {
-                let loc_str = install_loc.to_string_lossy().to_lowercase().replace('/', "\\");
+                let loc_str = install_loc
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .replace('/', "\\");
                 let clean_loc = loc_str.trim_end_matches('\\');
 
                 // Must be longer than a drive root or naked Program Files
@@ -451,7 +457,8 @@ fn enumerate_windows_installed_software() -> Vec<SoftwareRecord> {
             }
 
             if enum_status == ERROR_SUCCESS {
-                let subkey_name = String::from_utf16_lossy(&subkey_name_buf[..subkey_name_len as usize]);
+                let subkey_name =
+                    String::from_utf16_lossy(&subkey_name_buf[..subkey_name_len as usize]);
                 let full_source = format!("{source_tag}\\{subkey_name}");
 
                 // Open the specific application subkey
@@ -474,7 +481,8 @@ fn enumerate_windows_installed_software() -> Vec<SoftwareRecord> {
                 if open_status == ERROR_SUCCESS {
                     let _app_guard = RegKeyGuard(app_hkey);
                     let values = read_all_values(app_hkey);
-                    if let Ok(Some(rec)) = parse_uninstall_entry(&values, &full_source, view, scope) {
+                    if let Ok(Some(rec)) = parse_uninstall_entry(&values, &full_source, view, scope)
+                    {
                         records.push(rec);
                     }
                 }
@@ -488,7 +496,9 @@ fn enumerate_windows_installed_software() -> Vec<SoftwareRecord> {
 }
 
 #[cfg(windows)]
-fn read_all_values(hkey: windows_sys::Win32::System::Registry::HKEY) -> HashMap<String, RegistryValue> {
+fn read_all_values(
+    hkey: windows_sys::Win32::System::Registry::HKEY,
+) -> HashMap<String, RegistryValue> {
     use windows_sys::Win32::Foundation::*;
     use windows_sys::Win32::System::Registry::*;
 
@@ -538,7 +548,8 @@ fn read_all_values(hkey: windows_sys::Win32::System::Registry::HKEY) -> HashMap<
                 }
                 REG_DWORD => {
                     if data_len >= 4 {
-                        let dword = u32::from_le_bytes(data_buf[..4].try_into().unwrap_or_default());
+                        let dword =
+                            u32::from_le_bytes(data_buf[..4].try_into().unwrap_or_default());
                         Some(RegistryValue::Dword(dword))
                     } else {
                         None
@@ -566,21 +577,51 @@ mod tests {
     fn parse_complete_uninstall_entry() {
         let mut values = HashMap::new();
         values.insert("DisplayName".into(), RegistryValue::String("Git".into()));
-        values.insert("Publisher".into(), RegistryValue::String("The Git Development Community".into()));
-        values.insert("DisplayVersion".into(), RegistryValue::String("2.44.0".into()));
-        values.insert("InstallLocation".into(), RegistryValue::String("C:\\Program Files\\Git".into()));
-        values.insert("UninstallString".into(), RegistryValue::String("\"C:\\Program Files\\Git\\unins000.exe\"".into()));
-        values.insert("QuietUninstallString".into(), RegistryValue::String("\"C:\\Program Files\\Git\\unins000.exe\" /SILENT".into()));
-        values.insert("InstallDate".into(), RegistryValue::String("20260315".into()));
+        values.insert(
+            "Publisher".into(),
+            RegistryValue::String("The Git Development Community".into()),
+        );
+        values.insert(
+            "DisplayVersion".into(),
+            RegistryValue::String("2.44.0".into()),
+        );
+        values.insert(
+            "InstallLocation".into(),
+            RegistryValue::String("C:\\Program Files\\Git".into()),
+        );
+        values.insert(
+            "UninstallString".into(),
+            RegistryValue::String("\"C:\\Program Files\\Git\\unins000.exe\"".into()),
+        );
+        values.insert(
+            "QuietUninstallString".into(),
+            RegistryValue::String("\"C:\\Program Files\\Git\\unins000.exe\" /SILENT".into()),
+        );
+        values.insert(
+            "InstallDate".into(),
+            RegistryValue::String("20260315".into()),
+        );
         values.insert("EstimatedSize".into(), RegistryValue::Dword(350000));
 
-        let res = parse_uninstall_entry(&values, "HKLM\\Git", RegistryView::View64Bit, SoftwareScope::MachineWide).unwrap();
+        let res = parse_uninstall_entry(
+            &values,
+            "HKLM\\Git",
+            RegistryView::View64Bit,
+            SoftwareScope::MachineWide,
+        )
+        .unwrap();
         assert!(res.is_some());
         let rec = res.unwrap();
         assert_eq!(rec.display_name, "Git");
-        assert_eq!(rec.publisher.as_deref(), Some("The Git Development Community"));
+        assert_eq!(
+            rec.publisher.as_deref(),
+            Some("The Git Development Community")
+        );
         assert_eq!(rec.display_version.as_deref(), Some("2.44.0"));
-        assert_eq!(rec.install_location, Some(PathBuf::from("C:\\Program Files\\Git")));
+        assert_eq!(
+            rec.install_location,
+            Some(PathBuf::from("C:\\Program Files\\Git"))
+        );
         assert_eq!(rec.estimated_size_kb, Some(350000));
         assert_eq!(rec.architecture, RegistryView::View64Bit);
         assert_eq!(rec.scope, SoftwareScope::MachineWide);
@@ -589,9 +630,18 @@ mod tests {
     #[test]
     fn parse_missing_optional_values_still_succeeds() {
         let mut values = HashMap::new();
-        values.insert("DisplayName".into(), RegistryValue::String("Notepad++".into()));
+        values.insert(
+            "DisplayName".into(),
+            RegistryValue::String("Notepad++".into()),
+        );
 
-        let res = parse_uninstall_entry(&values, "HKLM\\Notepad++", RegistryView::View32Bit, SoftwareScope::PerUser).unwrap();
+        let res = parse_uninstall_entry(
+            &values,
+            "HKLM\\Notepad++",
+            RegistryView::View32Bit,
+            SoftwareScope::PerUser,
+        )
+        .unwrap();
         assert!(res.is_some());
         let rec = res.unwrap();
         assert_eq!(rec.display_name, "Notepad++");
@@ -606,17 +656,32 @@ mod tests {
         let mut values = HashMap::new();
         values.insert("Publisher".into(), RegistryValue::String("Someone".into()));
 
-        let res = parse_uninstall_entry(&values, "HKLM\\Unknown", RegistryView::View64Bit, SoftwareScope::MachineWide).unwrap();
+        let res = parse_uninstall_entry(
+            &values,
+            "HKLM\\Unknown",
+            RegistryView::View64Bit,
+            SoftwareScope::MachineWide,
+        )
+        .unwrap();
         assert!(res.is_none());
     }
 
     #[test]
     fn parse_system_component_returns_none() {
         let mut values = HashMap::new();
-        values.insert("DisplayName".into(), RegistryValue::String("Windows System Package".into()));
+        values.insert(
+            "DisplayName".into(),
+            RegistryValue::String("Windows System Package".into()),
+        );
         values.insert("SystemComponent".into(), RegistryValue::Dword(1));
 
-        let res = parse_uninstall_entry(&values, "HKLM\\SysPkg", RegistryView::View64Bit, SoftwareScope::MachineWide).unwrap();
+        let res = parse_uninstall_entry(
+            &values,
+            "HKLM\\SysPkg",
+            RegistryView::View64Bit,
+            SoftwareScope::MachineWide,
+        )
+        .unwrap();
         assert!(res.is_none(), "SystemComponent=1 must be skipped");
     }
 
@@ -625,9 +690,17 @@ mod tests {
         let mut values = HashMap::new();
         values.insert("DisplayName".into(), RegistryValue::Dword(1234));
 
-        let res = parse_uninstall_entry(&values, "HKLM\\Bad", RegistryView::View64Bit, SoftwareScope::MachineWide);
+        let res = parse_uninstall_entry(
+            &values,
+            "HKLM\\Bad",
+            RegistryView::View64Bit,
+            SoftwareScope::MachineWide,
+        );
         assert!(res.is_err());
-        assert!(matches!(res.unwrap_err(), RegistryError::MalformedData { .. }));
+        assert!(matches!(
+            res.unwrap_err(),
+            RegistryError::MalformedData { .. }
+        ));
     }
 
     #[test]
@@ -636,7 +709,9 @@ mod tests {
             display_name: "Visual Studio Code".into(),
             publisher: Some("Microsoft Corporation".into()),
             display_version: Some("1.88.0".into()),
-            install_location: Some(PathBuf::from("C:\\Users\\User\\AppData\\Local\\Programs\\Microsoft VS Code")),
+            install_location: Some(PathBuf::from(
+                "C:\\Users\\User\\AppData\\Local\\Programs\\Microsoft VS Code",
+            )),
             architecture: RegistryView::View64Bit,
             registry_source: "HKCU_64\\VSCode".into(),
             scope: SoftwareScope::PerUser,
@@ -667,7 +742,9 @@ mod tests {
         let catalog = SoftwareCatalog::new(vec![SoftwareRecord {
             display_name: "Blender".into(),
             publisher: Some("Blender Foundation".into()),
-            install_location: Some(PathBuf::from("C:\\Program Files\\Blender Foundation\\Blender 4.0")),
+            install_location: Some(PathBuf::from(
+                "C:\\Program Files\\Blender Foundation\\Blender 4.0",
+            )),
             architecture: RegistryView::View64Bit,
             scope: SoftwareScope::MachineWide,
             ..Default::default()
@@ -693,7 +770,9 @@ mod tests {
         }]);
 
         let file = Path::new("C:\\Program Files\\GIMP 2\\uninst\\unins000.dat");
-        let attr = catalog.attribute(file).expect("should attribute from uninstall executable dir");
+        let attr = catalog
+            .attribute(file)
+            .expect("should attribute from uninstall executable dir");
         assert_eq!(attr.app_name, "GIMP");
         assert_eq!(attr.confidence, AttributionConfidence::ExecutableMatch);
     }
@@ -709,8 +788,11 @@ mod tests {
             ..Default::default()
         }]);
 
-        let file = Path::new("C:\\Users\\User\\AppData\\Local\\Slack Technologies\\Slack\\app.asar");
-        let attr = catalog.attribute(file).expect("should attribute via vendor + app hierarchy");
+        let file =
+            Path::new("C:\\Users\\User\\AppData\\Local\\Slack Technologies\\Slack\\app.asar");
+        let attr = catalog
+            .attribute(file)
+            .expect("should attribute via vendor + app hierarchy");
         assert_eq!(attr.app_name, "Slack");
         assert_eq!(attr.confidence, AttributionConfidence::StrongPathMatch);
     }

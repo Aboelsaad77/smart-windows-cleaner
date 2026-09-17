@@ -83,7 +83,11 @@ fn query_windows_file_attributes(path: &Path) -> AttributeQueryResult {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{GetFileAttributesW, INVALID_FILE_ATTRIBUTES};
 
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     let raw = unsafe { GetFileAttributesW(wide.as_ptr()) };
     if raw == INVALID_FILE_ATTRIBUTES {
         let err = std::io::Error::last_os_error();
@@ -103,7 +107,8 @@ mod tests {
 
     #[test]
     fn attribute_query_result_methods_normal() {
-        let res = AttributeQueryResult::Available(WindowsAttributes::from_raw(WindowsAttributes::NORMAL));
+        let res =
+            AttributeQueryResult::Available(WindowsAttributes::from_raw(WindowsAttributes::NORMAL));
         assert!(res.is_available());
         assert!(!res.is_failed());
         assert!(!res.is_hidden());
@@ -113,7 +118,8 @@ mod tests {
 
     #[test]
     fn attribute_query_result_methods_hidden() {
-        let res = AttributeQueryResult::Available(WindowsAttributes::from_raw(WindowsAttributes::HIDDEN));
+        let res =
+            AttributeQueryResult::Available(WindowsAttributes::from_raw(WindowsAttributes::HIDDEN));
         assert!(res.is_available());
         assert!(res.is_hidden());
         assert!(!res.is_system());
@@ -121,7 +127,8 @@ mod tests {
 
     #[test]
     fn attribute_query_result_methods_system() {
-        let res = AttributeQueryResult::Available(WindowsAttributes::from_raw(WindowsAttributes::SYSTEM));
+        let res =
+            AttributeQueryResult::Available(WindowsAttributes::from_raw(WindowsAttributes::SYSTEM));
         assert!(res.is_available());
         assert!(!res.is_hidden());
         assert!(res.is_system());
@@ -129,7 +136,8 @@ mod tests {
 
     #[test]
     fn attribute_query_result_methods_both_flags() {
-        let raw = WindowsAttributes::HIDDEN | WindowsAttributes::SYSTEM | WindowsAttributes::ARCHIVE;
+        let raw =
+            WindowsAttributes::HIDDEN | WindowsAttributes::SYSTEM | WindowsAttributes::ARCHIVE;
         let res = AttributeQueryResult::Available(WindowsAttributes::from_raw(raw));
         assert!(res.is_available());
         assert!(res.is_hidden());

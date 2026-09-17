@@ -69,8 +69,7 @@ impl ElevationStatus {
     /// Returns true when running under a limited split-token or when the user is an
     /// administrator group member running unelevated.
     pub fn can_elevate(&self) -> bool {
-        self.elevation_type == ElevationType::Limited
-            || (!self.is_elevated && self.is_admin_member)
+        self.elevation_type == ElevationType::Limited || (!self.is_elevated && self.is_admin_member)
     }
 
     /// Evaluates whether accessing or cleaning `path` requires elevated Administrator privileges.
@@ -175,9 +174,7 @@ fn inspect_windows_token() -> ElevationStatus {
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) != 0 {
             let _token_guard = TokenGuard(token);
             // 1. Query TokenElevation
-            let mut elev = TOKEN_ELEVATION {
-                TokenIsElevated: 0,
-            };
+            let mut elev = TOKEN_ELEVATION { TokenIsElevated: 0 };
             let mut ret_len = 0u32;
             if GetTokenInformation(
                 token,

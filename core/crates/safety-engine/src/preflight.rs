@@ -17,9 +17,7 @@
 //! ```
 
 use crate::{enforce, SafetyDecision, SafetyPolicy, SafetyVerdict};
-use sc_file_models::{
-    infer_content_kind, now_secs, pe, AiSignal, FileClass, FileRecord,
-};
+use sc_file_models::{infer_content_kind, now_secs, pe, AiSignal, FileClass, FileRecord};
 use sc_risk_engine::{assess, AssessContext, RiskAssessment};
 use std::fmt;
 use std::fs;
@@ -166,19 +164,10 @@ impl fmt::Display for PreflightError {
                 )
             }
             PreflightError::StateDrift { path, reason } => {
-                write!(
-                    f,
-                    "state drift detected on {}: {}",
-                    path.display(),
-                    reason
-                )
+                write!(f, "state drift detected on {}: {}", path.display(), reason)
             }
             PreflightError::Blocked { decision } => {
-                write!(
-                    f,
-                    "blocked by safety engine: {}",
-                    decision.notes.join("; ")
-                )
+                write!(f, "blocked by safety engine: {}", decision.notes.join("; "))
             }
             PreflightError::ConfirmationRequired { decision, reason } => {
                 write!(
@@ -217,10 +206,7 @@ pub fn is_in_use(path: &Path) -> bool {
             let _ = file.unlock();
         }
         // Then rename probe
-        let stem = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file");
+        let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
         let probe = path.with_file_name(format!("{stem}.sc-lock-probe-{}", std::process::id()));
         match std::fs::rename(path, &probe) {
             Err(_) => true,
@@ -238,7 +224,11 @@ pub fn is_in_use(path: &Path) -> bool {
     #[cfg(not(windows))]
     {
         use fs2::FileExt;
-        if let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(path) {
+        if let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+        {
             if file.try_lock_exclusive().is_err() {
                 return true;
             }
@@ -536,8 +526,8 @@ mod tests {
 
         let policy = SafetyPolicy::default();
         // UserConfirmed without strict_drift allows re-evaluating fresh state
-        let opts = PreflightOptions::new(&policy, RequestedAction::UserConfirmed)
-            .with_expected(&expected);
+        let opts =
+            PreflightOptions::new(&policy, RequestedAction::UserConfirmed).with_expected(&expected);
         let outcome = revalidate(&path, &opts).unwrap();
         assert!(outcome.had_drift);
         assert_eq!(outcome.record.size, 7);

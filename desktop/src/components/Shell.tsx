@@ -4,6 +4,7 @@ import { AppHeader } from './AppHeader';
 import { Sidebar } from './Sidebar';
 import { StatusBar } from './StatusBar';
 import { ElevationModal } from './ElevationModal';
+import { UpdateBanner } from './UpdateBanner';
 import { ErrorState } from '../design-system/ErrorState';
 import { DashboardView } from '../views/DashboardView';
 import { ScanView } from '../views/ScanView';
@@ -76,6 +77,9 @@ export const Shell: React.FC = () => {
             position: 'relative',
           }}
         >
+          {/* Secure Auto-Updater Active Banner (Stage 2) */}
+          <UpdateBanner />
+
           {/* Active Notifications Banner */}
           {notifications.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>

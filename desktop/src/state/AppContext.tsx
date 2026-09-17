@@ -6,6 +6,11 @@ import {
   ScanSummaryDto,
   IpcError,
   IpcEvent,
+  UpdateStatusDto,
+  UpdateChannel,
+  LicenseStatusDto,
+  DeviceAuthResponseDto,
+  DeviceAuthPollResultDto,
 } from '../types/ipc';
 import { IpcClient, IpcClientError } from '../ipc/client';
 import { CoreConnectionStatus } from '../design-system/StatusIndicator';
@@ -46,6 +51,20 @@ export interface AppContextValue {
   elevationReason?: string;
   openElevationModal: (reason?: string) => void;
   closeElevationModal: () => void;
+  // Secure Auto-Updater State & Actions (Stage 2)
+  updateStatus: UpdateStatusDto | null;
+  checkForUpdates: (manifestUrl?: string) => Promise<UpdateStatusDto>;
+  downloadUpdate: () => Promise<UpdateStatusDto>;
+  applyUpdate: (confirm: boolean) => Promise<{ applied: boolean; deferred: boolean; reason?: string }>;
+  setUpdateChannel: (channel: UpdateChannel) => Promise<UpdateStatusDto>;
+  cancelUpdate: () => Promise<UpdateStatusDto>;
+  // Licensing & Entitlements State & Actions (Stage 3)
+  licenseStatus: LicenseStatusDto | null;
+  isEntitled: (feature: string) => boolean;
+  activateLicenseManual: (token: string) => Promise<LicenseStatusDto>;
+  startDeviceAuth: () => Promise<DeviceAuthResponseDto>;
+  pollDeviceAuth: (deviceCode: string) => Promise<DeviceAuthPollResultDto>;
+  deactivateLicense: () => Promise<LicenseStatusDto>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -74,6 +93,12 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   const [pendingOperations, setPendingOperations] = useState<Set<string>>(new Set());
   const [isElevationModalOpen, setIsElevationModalOpen] = useState<boolean>(false);
   const [elevationReason, setElevationReason] = useState<string | undefined>(undefined);
+
+  // Secure Auto-Updater State (Stage 2)
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatusDto | null>(null);
+
+  // Licensing & Entitlements State (Stage 3)
+  const [licenseStatus, setLicenseStatus] = useState<LicenseStatusDto | null>(null);
 
   const openElevationModal = useCallback((reason?: string) => {
     setElevationReason(reason);
@@ -125,15 +150,19 @@ export const AppProvider: React.FC<AppProviderProps> = ({
       }
 
       // Query core state per Requirement 5
-      const [sysStatus, scnStatus, setts] = await Promise.all([
+      const [sysStatus, scnStatus, setts, licStatus] = await Promise.all([
         client.getSystemStatus(),
         client.getScanStatus(),
         client.getSettings(),
+        client.licensingGetStatus().catch(() => null),
       ]);
 
       setSystemStatus(sysStatus);
       setScanStatus(scnStatus);
       setSettings(setts);
+      if (licStatus) {
+        setLicenseStatus(licStatus);
+      }
       setConnectionStatus('connected');
     } catch (err) {
       setConnectionStatus('error');
@@ -166,6 +195,187 @@ export const AppProvider: React.FC<AppProviderProps> = ({
       throw err;
     }
   }, [client, addNotification, initCoreConnection]);
+
+  // Secure Auto-Updater Operations (Stage 2)
+  const checkForUpdates = useCallback(
+    async (manifestUrl?: string) => {
+      addNotification('info', 'Checking for cryptographically signed release updates...');
+      try {
+        const res = await trackOperation('check_updates', client.updaterCheckForUpdates(manifestUrl));
+        setUpdateStatus(res);
+        if (res.state === 'available' && res.available_update) {
+          addNotification(
+            'info',
+            `Update available: v${res.available_update.version} (${res.available_update.channel} channel).`
+          );
+        } else if (res.state === 'not_available') {
+          addNotification('info', 'Smart Windows Cleaner is up to date.');
+        }
+        return res;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addNotification('error', `Update check failed: ${msg}`);
+        throw err;
+      }
+    },
+    [client, trackOperation, addNotification]
+  );
+
+  const downloadUpdate = useCallback(async () => {
+    addNotification('info', 'Downloading verified update package...');
+    try {
+      const res = await trackOperation('download_update', client.updaterDownloadUpdate());
+      setUpdateStatus(res);
+      addNotification('info', 'Update downloaded and cryptographic hashes verified successfully.');
+      return res;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addNotification('error', `Update download failed: ${msg}`);
+      throw err;
+    }
+  }, [client, trackOperation, addNotification]);
+
+  const applyUpdate = useCallback(
+    async (confirm: boolean) => {
+      if (!confirm) {
+        throw new Error('User confirmation is required to apply the update.');
+      }
+
+      // Check runtime safety: block if active operations exist
+      const isBusy =
+        scanStatus?.state === 'scanning' ||
+        pendingOperations.size > 0;
+
+      if (isBusy) {
+        const deferredMsg = 'Update Ready — Restart when current operation finishes.';
+        setUpdateStatus((prev) =>
+          prev
+            ? {
+                ...prev,
+                state: 'deferred_busy',
+                deferred_reason: deferredMsg,
+              }
+            : null
+        );
+        addNotification('warn', deferredMsg);
+        return { applied: false, deferred: true, reason: deferredMsg };
+      }
+
+      try {
+        const res = await client.updaterApplyUpdate(confirm);
+        if (res.deferred) {
+          addNotification('warn', res.reason || 'Update deferred: engine busy.');
+        } else {
+          addNotification('info', 'Restarting application to apply update...');
+        }
+        return res;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addNotification('error', `Failed to apply update: ${msg}`);
+        throw err;
+      }
+    },
+    [client, scanStatus, pendingOperations, addNotification]
+  );
+
+  const setUpdateChannel = useCallback(
+    async (channel: UpdateChannel) => {
+      try {
+        const res = await client.updaterSetChannel(channel);
+        setUpdateStatus(res);
+        addNotification('info', `Update channel switched to '${channel}'.`);
+        return res;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addNotification('error', `Failed to switch channel: ${msg}`);
+        throw err;
+      }
+    },
+    [client, addNotification]
+  );
+
+  const cancelUpdate = useCallback(async () => {
+    try {
+      const res = await client.updaterCancel();
+      setUpdateStatus(res);
+      addNotification('info', 'Update operation cancelled.');
+      return res;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addNotification('error', `Failed to cancel update: ${msg}`);
+      throw err;
+    }
+  }, [client, addNotification]);
+
+  // Licensing Operations & Entitlements Feature Gate (Stage 3)
+  const isEntitled = useCallback(
+    (feature: string): boolean => {
+      if (!licenseStatus || !licenseStatus.is_active || licenseStatus.clock_rollback_detected) {
+        return false;
+      }
+      return licenseStatus.entitlements.includes(feature);
+    },
+    [licenseStatus]
+  );
+
+  const activateLicenseManual = useCallback(
+    async (token: string): Promise<LicenseStatusDto> => {
+      addNotification('info', 'Verifying cryptographic license signature...');
+      try {
+        const res = await trackOperation('activate_license', client.licensingActivateManual(token));
+        setLicenseStatus(res);
+        addNotification('info', `Pro license activated successfully for account ${res.account_email ?? 'Pro User'}.`);
+        return res;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addNotification('error', `License activation failed: ${msg}`);
+        throw err;
+      }
+    },
+    [client, trackOperation, addNotification]
+  );
+
+  const startDeviceAuth = useCallback(async (): Promise<DeviceAuthResponseDto> => {
+    try {
+      return await client.licensingStartDeviceAuth();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addNotification('error', `Device authorization request failed: ${msg}`);
+      throw err;
+    }
+  }, [client, addNotification]);
+
+  const pollDeviceAuth = useCallback(
+    async (deviceCode: string): Promise<DeviceAuthPollResultDto> => {
+      try {
+        const res = await client.licensingPollDeviceAuth(deviceCode);
+        if (res.status === 'authorized') {
+          const updated = await client.licensingGetStatus();
+          setLicenseStatus(updated);
+          addNotification('info', 'Device successfully authorized! Pro features unlocked.');
+        }
+        return res;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addNotification('error', `Device polling error: ${msg}`);
+        throw err;
+      }
+    },
+    [client, addNotification]
+  );
+
+  const deactivateLicense = useCallback(async (): Promise<LicenseStatusDto> => {
+    try {
+      const res = await client.licensingDeactivate();
+      setLicenseStatus(res);
+      addNotification('info', 'License removed. Operating in Community Edition.');
+      return res;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addNotification('error', `Failed to deactivate license: ${msg}`);
+      throw err;
+    }
+  }, [client, addNotification]);
 
   // Subscribe to core streaming events per Requirement 5
   useEffect(() => {
@@ -229,6 +439,30 @@ export const AppProvider: React.FC<AppProviderProps> = ({
           addNotification(event.level, event.message);
           break;
 
+        case 'updater_status_changed':
+          setUpdateStatus(event.status);
+          break;
+
+        case 'updater_progress':
+          setUpdateStatus((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  state: 'downloading',
+                  download_progress: {
+                    percent: event.percent,
+                    bytes_transferred: event.bytes_transferred,
+                    total_bytes: event.total_bytes,
+                  },
+                }
+              : null
+          );
+          break;
+
+        case 'updater_error':
+          addNotification('error', `Updater [${event.code}]: ${event.message}`);
+          break;
+
         default:
           break;
       }
@@ -259,6 +493,20 @@ export const AppProvider: React.FC<AppProviderProps> = ({
     elevationReason,
     openElevationModal,
     closeElevationModal,
+    // Secure Auto-Updater
+    updateStatus,
+    checkForUpdates,
+    downloadUpdate,
+    applyUpdate,
+    setUpdateChannel,
+    cancelUpdate,
+    // Licensing & Entitlements
+    licenseStatus,
+    isEntitled,
+    activateLicenseManual,
+    startDeviceAuth,
+    pollDeviceAuth,
+    deactivateLicense,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

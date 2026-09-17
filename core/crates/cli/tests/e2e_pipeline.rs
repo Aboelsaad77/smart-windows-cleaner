@@ -168,7 +168,8 @@ fn test_end_to_end_pipeline() {
 
     // Persist discovered files in SQLite
     for r in &scan_result.records {
-        db.upsert_file(session_id, r).expect("failed to upsert file");
+        db.upsert_file(session_id, r)
+            .expect("failed to upsert file");
     }
     db.finish_scan_session(session_id, scan_result.files, scan_result.total_size)
         .expect("failed to finish scan session");
@@ -264,13 +265,29 @@ fn test_end_to_end_pipeline() {
         .expect("safe file must pass pre-flight and enter vault");
 
     // Verification of safe quarantine
-    assert!(!env.safe_cache_file.exists(), "original file must be moved into vault");
-    assert!(quarantined_item.vault_path.is_file(), "file must exist inside vault");
+    assert!(
+        !env.safe_cache_file.exists(),
+        "original file must be moved into vault"
+    );
+    assert!(
+        quarantined_item.vault_path.is_file(),
+        "file must exist inside vault"
+    );
     assert_eq!(quarantined_item.status, ItemStatus::Quarantined);
-    assert_eq!(quarantined_item.sha256, expected_sha, "manifest SHA-256 must match");
+    assert_eq!(
+        quarantined_item.sha256, expected_sha,
+        "manifest SHA-256 must match"
+    );
     assert_eq!(quarantined_item.size, env.safe_content.len() as u64);
-    assert_eq!(preflight_outcome.decision.verdict, SafetyVerdict::AutoQuarantine);
-    assert_eq!(vault.items().len(), 1, "vault manifest must contain exactly 1 item");
+    assert_eq!(
+        preflight_outcome.decision.verdict,
+        SafetyVerdict::AutoQuarantine
+    );
+    assert_eq!(
+        vault.items().len(),
+        1,
+        "vault manifest must contain exactly 1 item"
+    );
 
     // Record audit and DB mirror for successful quarantine
     db.log_audit(&AuditEntry {
@@ -315,8 +332,15 @@ fn test_end_to_end_pipeline() {
     }
 
     // Invariant: protected file remains completely untouched
-    assert!(env.protected_dll_file.is_file(), "protected file must remain on disk");
-    assert_eq!(vault.items().len(), 1, "vault must NOT ingest protected file");
+    assert!(
+        env.protected_dll_file.is_file(),
+        "protected file must remain on disk"
+    );
+    assert_eq!(
+        vault.items().len(),
+        1,
+        "vault must NOT ingest protected file"
+    );
 
     db.log_audit(&AuditEntry {
         action: "quarantine".into(),
@@ -432,7 +456,10 @@ fn test_end_to_end_pipeline() {
         }
 
         // Invariant: target file is 100% untouched
-        assert!(env.important_doc_file.is_file(), "target document must remain untouched");
+        assert!(
+            env.important_doc_file.is_file(),
+            "target document must remain untouched"
+        );
         assert_eq!(
             fs::read(&env.important_doc_file).unwrap(),
             b"CONFIDENTIAL USER TAX DATA",
@@ -480,7 +507,11 @@ fn test_end_to_end_pipeline() {
         bypass_err
     );
     assert!(env.locked_file.is_file());
-    assert_eq!(vault.items().len(), 1, "vault manifest must not accept bypassed items");
+    assert_eq!(
+        vault.items().len(),
+        1,
+        "vault manifest must not accept bypassed items"
+    );
     lock_handle2.unlock().unwrap();
 
     db.log_audit(&AuditEntry {
@@ -503,7 +534,10 @@ fn test_end_to_end_pipeline() {
         .expect("restore must succeed");
 
     assert_eq!(restored_item.status, ItemStatus::Restored);
-    assert!(env.safe_cache_file.is_file(), "file must be restored to original path");
+    assert!(
+        env.safe_cache_file.is_file(),
+        "file must be restored to original path"
+    );
 
     // Verify SHA-256 and content byte-for-byte
     let restored_content = fs::read(&env.safe_cache_file).unwrap();
@@ -540,7 +574,10 @@ fn test_end_to_end_pipeline() {
     // STEP 6: SQLITE AUDIT TRAIL VERIFICATION
     // =========================================================================
     let audit_rows = db.audit_since(0).expect("failed to query audit log");
-    assert!(audit_rows.len() >= 6, "all lifecycle events must be logged in SQLite");
+    assert!(
+        audit_rows.len() >= 6,
+        "all lifecycle events must be logged in SQLite"
+    );
 
     let results: Vec<String> = audit_rows.iter().map(|r| r.result.clone()).collect();
     assert!(results.contains(&"success".to_string()));

@@ -51,7 +51,11 @@ fn verify_authenticode_windows(path: &Path) -> SignatureInfo {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Security::WinTrust::*;
 
-    let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let wide_path: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
 
     let mut file_info = WINTRUST_FILE_INFO {
         cbStruct: std::mem::size_of::<WINTRUST_FILE_INFO>() as u32,
@@ -183,24 +187,22 @@ fn verify_authenticode_windows(path: &Path) -> SignatureInfo {
             )
         }
         // TRUST_E_PROVIDER_UNKNOWN (0x800B0001) or TRUST_E_ACTION_UNKNOWN (0x800B0002)
-        0x800B0001 | 0x800B0002 => {
-            SignatureInfo {
-                status: SignatureStatus::SignedUnknown,
-                is_pe: true,
-                trust_status: TrustStatus::UnknownTrust,
-                signer_name: extract_signer_name(path),
-                error_code: Some(status_u32),
-                error_message: Some(format!("Trust provider or action unrecognized (0x{status_u32:08X})")),
-            }
-        }
+        0x800B0001 | 0x800B0002 => SignatureInfo {
+            status: SignatureStatus::SignedUnknown,
+            is_pe: true,
+            trust_status: TrustStatus::UnknownTrust,
+            signer_name: extract_signer_name(path),
+            error_code: Some(status_u32),
+            error_message: Some(format!(
+                "Trust provider or action unrecognized (0x{status_u32:08X})"
+            )),
+        },
         // General or OS errors (e.g. sharing violation, access denied, etc.)
-        other => {
-            SignatureInfo::verification_error(
-                true,
-                Some(other),
-                format!("WinVerifyTrust returned error code 0x{other:08X}"),
-            )
-        }
+        other => SignatureInfo::verification_error(
+            true,
+            Some(other),
+            format!("WinVerifyTrust returned error code 0x{other:08X}"),
+        ),
     }
 }
 
@@ -209,7 +211,11 @@ fn extract_signer_name(path: &Path) -> Option<String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Security::Cryptography::*;
 
-    let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let wide_path: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     let mut encoding: u32 = 0;
     let mut content_type: u32 = 0;
     let mut format_type: u32 = 0;
@@ -381,7 +387,10 @@ mod tests {
         assert_eq!(sig.status, SignatureStatus::VerificationError);
         assert_eq!(sig.trust_status, TrustStatus::VerificationFailed);
         assert!(sig.error_code.is_some());
-        assert!(!sig.is_unsigned(), "Inaccessible file must NEVER be reported as unsigned");
+        assert!(
+            !sig.is_unsigned(),
+            "Inaccessible file must NEVER be reported as unsigned"
+        );
     }
 
     #[test]

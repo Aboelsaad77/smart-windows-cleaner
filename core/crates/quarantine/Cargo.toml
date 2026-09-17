@@ -1,6 +1,6 @@
 [package]
 name = "sc-quarantine"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Reversible-delete vault with manifest tracking and SHA-256 verification"
 

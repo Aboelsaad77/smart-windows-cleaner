@@ -346,10 +346,10 @@ fn hash_file(path: &Path) -> io::Result<(String, Vec<u8>)> {
 /// Platform-specific bits. Clean stubs on non-Windows dev machines; native
 /// behavior on Windows (milestone M1).
 pub mod platform {
-    use std::path::PathBuf;
     pub use crate::elevation::{
         check_elevation_requirement, ElevationRequirement, ElevationStatus, ElevationType,
     };
+    use std::path::PathBuf;
 
     /// Roots used when `ScanConfig::roots` is empty: the user profile plus
     /// every drive letter whose root exists (no external dependency;
@@ -403,10 +403,7 @@ pub mod platform {
     pub fn is_in_use(path: &std::path::Path) -> bool {
         #[cfg(windows)]
         {
-            let stem = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("file");
+            let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
             let probe = path.with_file_name(format!("{stem}.sc-lock-probe-{}", std::process::id()));
             match std::fs::rename(path, &probe) {
                 Err(_) => true, // sharing violation / access denied → locked
@@ -682,7 +679,10 @@ mod tests {
             .iter()
             .find(|r| r.path.ends_with("renamed-malware"))
             .unwrap();
-        assert!(m.is_pe, "extensionless PE must be detected from bytes in deep mode");
+        assert!(
+            m.is_pe,
+            "extensionless PE must be detected from bytes in deep mode"
+        );
         assert!(m.sha256.is_some());
     }
 

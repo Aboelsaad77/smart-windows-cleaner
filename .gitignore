@@ -5,6 +5,8 @@
 # Node / Electron (milestone M2)
 node_modules/
 dist/
+dist-electron/
+dist-release/
 out/
 release/
 

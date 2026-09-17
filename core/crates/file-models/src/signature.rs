@@ -164,7 +164,11 @@ impl SignatureInfo {
     }
 
     /// Creates an explicit verification error result (I/O, sharing violation, OOM, etc.).
-    pub fn verification_error(is_pe: bool, error_code: Option<u32>, message: impl Into<String>) -> Self {
+    pub fn verification_error(
+        is_pe: bool,
+        error_code: Option<u32>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             status: SignatureStatus::VerificationError,
             is_pe,

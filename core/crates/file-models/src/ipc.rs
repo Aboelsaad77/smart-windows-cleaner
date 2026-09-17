@@ -45,13 +45,25 @@ pub enum IpcPayload {
 
     // ---- Commands ----
     StartScan(StartScanCommand),
-    CancelScan { session_id: String },
-    RequestAnalysis { path: PathBuf },
-    SelectCandidate { path: PathBuf, selected: bool },
-    SelectAllCandidates { filter: Option<CandidateFilter>, selected: bool },
+    CancelScan {
+        session_id: String,
+    },
+    RequestAnalysis {
+        path: PathBuf,
+    },
+    SelectCandidate {
+        path: PathBuf,
+        selected: bool,
+    },
+    SelectAllCandidates {
+        filter: Option<CandidateFilter>,
+        selected: bool,
+    },
     QuarantineSelected(QuarantineSelectedCommand),
     RestoreQuarantineItem(RestoreItemCommand),
-    PurgeQuarantineItem { item_id: String },
+    PurgeQuarantineItem {
+        item_id: String,
+    },
     Rescan,
     SaveSettings(SaveSettingsCommand),
 }
@@ -384,9 +396,7 @@ pub enum IpcEvent {
         estimated_reclaimable_bytes: u64,
     },
     /// Scan completed successfully.
-    ScanCompleted {
-        summary: ScanSummaryDto,
-    },
+    ScanCompleted { summary: ScanSummaryDto },
     /// Scan cancelled by user.
     ScanCancelled {
         session_id: String,

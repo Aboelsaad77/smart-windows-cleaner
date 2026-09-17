@@ -82,9 +82,10 @@ impl LocalRulesEngine {
                 reason: "File is located in the Windows operating system temporary folder.".into(),
                 confidence: RuleConfidence::High,
                 reclaimable_size: record.size,
-                safety_implications: "System temporary files are generally safe to clean if unlocked, \
+                safety_implications:
+                    "System temporary files are generally safe to clean if unlocked, \
                                       but active OS installers may lock files currently in use."
-                    .into(),
+                        .into(),
             });
         }
 
@@ -99,9 +100,10 @@ impl LocalRulesEngine {
                 reason: "File is located in the user profile temporary directory.".into(),
                 confidence: RuleConfidence::High,
                 reclaimable_size: record.size,
-                safety_implications: "User temporary files are safe to clean when not locked by running processes. \
+                safety_implications:
+                    "User temporary files are safe to clean when not locked by running processes. \
                                       Files younger than 24 hours should be treated with care."
-                    .into(),
+                        .into(),
             });
         }
 
@@ -114,9 +116,10 @@ impl LocalRulesEngine {
                 reason: "File belongs to a known web browser HTTP/disk cache store.".into(),
                 confidence: RuleConfidence::High,
                 reclaimable_size: record.size,
-                safety_implications: "Browser caches are safe to purge; browsers will automatically \
+                safety_implications:
+                    "Browser caches are safe to purge; browsers will automatically \
                                       re-download required web assets as needed."
-                    .into(),
+                        .into(),
             });
         }
 
@@ -126,12 +129,14 @@ impl LocalRulesEngine {
                 rule_id: "APP_CACHE_FILE".into(),
                 category: RuleCategory::ApplicationCache,
                 matched_pattern: "*\\AppData\\*\\Cache\\*".into(),
-                reason: "File is located in a recognized third-party application cache directory.".into(),
+                reason: "File is located in a recognized third-party application cache directory."
+                    .into(),
                 confidence: RuleConfidence::High,
                 reclaimable_size: record.size,
-                safety_implications: "Application caches can be safely cleared when the target app is closed; \
+                safety_implications:
+                    "Application caches can be safely cleared when the target app is closed; \
                                       ensure the application is not actively running."
-                    .into(),
+                        .into(),
             });
         }
 
@@ -158,9 +163,10 @@ impl LocalRulesEngine {
                 reason: "File resides within the Windows shell Recycle Bin.".into(),
                 confidence: RuleConfidence::High,
                 reclaimable_size: record.size,
-                safety_implications: "Recycle Bin files require shell recycling API integration and \
+                safety_implications:
+                    "Recycle Bin files require shell recycling API integration and \
                                       should not be deleted blindly via raw filesystem access."
-                    .into(),
+                        .into(),
             });
         }
 
@@ -178,12 +184,14 @@ impl LocalRulesEngine {
                 rule_id: "OLD_INSTALLER_ARTIFACT".into(),
                 category: RuleCategory::InstallerArtifacts,
                 matched_pattern: "*\\Downloads\\*.msi | *.iso (>30d)".into(),
-                reason: "Stale software installer or setup package not modified for over 30 days.".into(),
+                reason: "Stale software installer or setup package not modified for over 30 days."
+                    .into(),
                 confidence: RuleConfidence::Medium,
                 reclaimable_size: record.size,
-                safety_implications: "Installers are re-downloadable, but user confirmation is required \
+                safety_implications:
+                    "Installers are re-downloadable, but user confirmation is required \
                                       before removing executables or packages."
-                    .into(),
+                        .into(),
             });
         }
 
@@ -280,7 +288,12 @@ mod tests {
             windir: Some("C:\\Windows".into()),
             ..Default::default()
         };
-        let r = make_rec("C:\\Windows\\Temp\\sess_123.tmp", 4096, 5, ContentKind::Temp);
+        let r = make_rec(
+            "C:\\Windows\\Temp\\sess_123.tmp",
+            4096,
+            5,
+            ContentKind::Temp,
+        );
         let ev = engine.evaluate(&r, &ctx);
 
         assert!(ev.iter().any(|e| e.rule_id == "WIN_TEMP_FILE"));
@@ -326,7 +339,10 @@ mod tests {
         let ev = engine.evaluate(&r, &ctx);
 
         assert!(ev.iter().any(|e| e.rule_id == "BROWSER_CACHE_FILE"));
-        let b_cache = ev.iter().find(|e| e.rule_id == "BROWSER_CACHE_FILE").unwrap();
+        let b_cache = ev
+            .iter()
+            .find(|e| e.rule_id == "BROWSER_CACHE_FILE")
+            .unwrap();
         assert_eq!(b_cache.category, RuleCategory::BrowserCache);
     }
 
@@ -384,7 +400,10 @@ mod tests {
             ContentKind::Document,
         );
         let ev = engine.evaluate(&r, &ctx);
-        assert!(ev.is_empty(), "Unknown personal documents must match 0 cleanup rules");
+        assert!(
+            ev.is_empty(),
+            "Unknown personal documents must match 0 cleanup rules"
+        );
     }
 
     #[test]
@@ -420,7 +439,10 @@ mod tests {
             ContentKind::Executable,
         );
         let ev = engine.evaluate(&r, &ctx);
-        assert!(ev.is_empty(), "Extension alone must NEVER trigger a cleanup rule");
+        assert!(
+            ev.is_empty(),
+            "Extension alone must NEVER trigger a cleanup rule"
+        );
     }
 
     #[test]
@@ -514,7 +536,10 @@ mod tests {
         let sxs = &ev[0];
         assert_eq!(sxs.rule_id, "WINSXS_COMPONENT_STORE");
         assert_eq!(sxs.category, RuleCategory::WinSxSComponentStore);
-        assert_eq!(sxs.reclaimable_size, 0, "WinSxS must report 0 reclaimable bytes");
+        assert_eq!(
+            sxs.reclaimable_size, 0,
+            "WinSxS must report 0 reclaimable bytes"
+        );
         assert!(sxs.safety_implications.contains("dism.exe"));
         assert!(sxs.is_winsxs());
     }

@@ -141,7 +141,9 @@ impl SoftwareRecord {
             self.estimated_size_kb = other.estimated_size_kb;
         }
         // If one entry is 64-bit and the other is 32-bit, prefer native 64-bit
-        if self.architecture == RegistryView::View32Bit && other.architecture == RegistryView::View64Bit {
+        if self.architecture == RegistryView::View32Bit
+            && other.architecture == RegistryView::View64Bit
+        {
             self.architecture = RegistryView::View64Bit;
         }
     }

@@ -128,10 +128,7 @@ pub fn enforce(
     // hard-blocked by their signature — OS components and drivers. A signed
     // userland binary (e.g. an old VS installer) is not critical: it follows
     // the risk band like any other file.
-    if record.is_signed
-        && record.is_pe
-        && (record.is_windows_component || record.is_driver)
-    {
+    if record.is_signed && record.is_pe && (record.is_windows_component || record.is_driver) {
         blocked.push("SIGNED_CRITICAL_BINARY");
     }
     if assessment.band == RiskBand::Protected {

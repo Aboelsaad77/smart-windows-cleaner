@@ -1,12 +1,21 @@
 [package]
 name = "sc-cli"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
-description = "Command-line frontend for the Smart Cleaner engine"
+description = "Command-line frontend and native core for Smart Cleaner"
+default-run = "smart-cleaner-core"
+
+[lib]
+name = "sc_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "smart-cleaner-core"
+path = "src/main.rs"
 
 [[bin]]
 name = "sc-cleaner"
-path = "src/main.rs"
+path = "src/bin/sc-cleaner.rs"
 
 [dependencies]
 sc-file-models = { workspace = true }
