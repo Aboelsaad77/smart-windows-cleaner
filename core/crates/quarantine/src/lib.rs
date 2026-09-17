@@ -21,6 +21,25 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
+pub use sc_safety_engine::preflight::{PreflightError, PreflightOptions, RequestedAction};
+
+#[derive(Debug)]
+pub enum GuardedQuarantineError {
+    Preflight(sc_safety_engine::PreflightError),
+    Vault(VaultError),
+}
+
+impl fmt::Display for GuardedQuarantineError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Preflight(e) => write!(f, "Pre-flight failed: {e}"),
+            Self::Vault(e) => write!(f, "Vault failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for GuardedQuarantineError {}
+
 pub const MANIFEST_FILE: &str = "vault.json";
 pub const ITEMS_DIR: &str = "items";
 
@@ -74,6 +93,7 @@ pub enum VaultError {
     DestinationInvalid(PathBuf),
     HashMismatch { expected: String, actual: String },
     InsufficientSpace { needed: u64, available: u64 },
+    PreflightBlocked(String),
 }
 
 impl fmt::Display for VaultError {
@@ -103,6 +123,9 @@ impl fmt::Display for VaultError {
             }
             VaultError::InsufficientSpace { needed, available } => {
                 write!(f, "not enough space: need {needed}, have {available}")
+            }
+            VaultError::PreflightBlocked(reason) => {
+                write!(f, "preflight blocked quarantine: {reason}")
             }
         }
     }
@@ -152,6 +175,30 @@ impl Vault {
         self.manifest.items.iter().find(|i| i.id == id)
     }
 
+    /// Guards the quarantine operation with the mandatory preflight gate.
+    pub fn quarantine_guarded(
+        &mut self,
+        src: &Path,
+        opts: &PreflightOptions,
+    ) -> Result<(QuarantineItem, sc_safety_engine::PreflightOutcome), GuardedQuarantineError> {
+        let mut full_opts = opts.clone();
+        full_opts.vault_root = Some(&self.root);
+        let outcome = sc_safety_engine::preflight::revalidate(src, &full_opts)
+            .map_err(GuardedQuarantineError::Preflight)?;
+
+        let meta = QuarantineMeta {
+            original_path: src.to_path_buf(),
+            reason: outcome.decision.notes.join("; "),
+            risk_band: outcome.assessment.band,
+            risk_score: outcome.assessment.score,
+        };
+
+        let item = self.quarantine(src, meta)
+            .map_err(GuardedQuarantineError::Vault)?;
+
+        Ok((item, outcome))
+    }
+
     /// Move a file into the vault. Returns the created manifest entry.
     ///
     /// Audit F4: the manifest entry is written and saved *before* the file is
@@ -161,6 +208,12 @@ impl Vault {
     pub fn quarantine(&mut self, src: &Path, meta: QuarantineMeta) -> VaultResult<QuarantineItem> {
         if !src.is_file() {
             return Err(VaultError::SourceMissing(src.to_path_buf()));
+        }
+        if let Ok(f) = fs::File::open(src) {
+            use fs2::FileExt;
+            if f.try_lock_exclusive().is_err() {
+                return Err(VaultError::PreflightBlocked("file is currently locked or in use".into()));
+            }
         }
         // The vault can never swallow itself.
         if self.under_vault(src) {
@@ -615,5 +668,87 @@ mod tests {
         assert!(!is_cross_device(&IoError::from_raw_os_error(libc::ENOENT)));
         // An io::Error without an OS code can never be EXDEV.
         assert!(!is_cross_device(&IoError::other("no os code")));
+    }
+
+    #[test]
+    fn quarantine_guarded_success_roundtrip() {
+        let (_root, src, vault_dir) = setup("guarded_success");
+        let mut vault = Vault::open(vault_dir).unwrap();
+        let policy = sc_safety_engine::SafetyPolicy::default();
+        let opts = PreflightOptions::new(&policy, RequestedAction::AutoQuarantine);
+        let (item, outcome) = vault.quarantine_guarded(&src, &opts).unwrap();
+        assert_eq!(item.status, ItemStatus::Quarantined);
+        assert!(item.vault_path.is_file());
+        assert!(!src.exists());
+        assert_eq!(outcome.decision.verdict, sc_safety_engine::SafetyVerdict::AutoQuarantine);
+    }
+
+    #[test]
+    fn quarantine_guarded_rejects_missing_file() {
+        let (_root, _src, vault_dir) = setup("guarded_missing");
+        let mut vault = Vault::open(vault_dir).unwrap();
+        let policy = sc_safety_engine::SafetyPolicy::default();
+        let opts = PreflightOptions::new(&policy, RequestedAction::AutoQuarantine);
+        let missing = _root.join("does_not_exist.tmp");
+        let err = vault.quarantine_guarded(&missing, &opts).unwrap_err();
+        match err {
+            GuardedQuarantineError::Preflight(PreflightError::SourceMissing(_)) => {}
+            other => panic!("expected SourceMissing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn quarantine_guarded_rejects_state_drift() {
+        let (_root, src, vault_dir) = setup("guarded_drift");
+        let mut vault = Vault::open(vault_dir).unwrap();
+        let policy = sc_safety_engine::SafetyPolicy::default();
+        let expected = sc_file_models::FileRecord::new(&src, 9999, 100);
+        let opts = PreflightOptions::new(&policy, RequestedAction::AutoQuarantine)
+            .with_expected(&expected);
+        let err = vault.quarantine_guarded(&src, &opts).unwrap_err();
+        match err {
+            GuardedQuarantineError::Preflight(PreflightError::StateDrift { .. }) => {}
+            other => panic!("expected StateDrift, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn quarantine_guarded_rejects_locked_file() {
+        use fs2::FileExt;
+        let (_root, src, vault_dir) = setup("guarded_locked");
+        let mut vault = Vault::open(vault_dir).unwrap();
+        let lock_file = fs::File::open(&src).unwrap();
+        let _ = lock_file.lock_exclusive();
+        let policy = sc_safety_engine::SafetyPolicy::default();
+        let opts = PreflightOptions::new(&policy, RequestedAction::AutoQuarantine);
+        let err = vault.quarantine_guarded(&src, &opts).unwrap_err();
+        match err {
+            GuardedQuarantineError::Preflight(PreflightError::FileInUse(_)) => {}
+            other => panic!("expected FileInUse, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn quarantine_guarded_rejects_symlink() {
+        let (root, src, vault_dir) = setup("guarded_symlink");
+        let mut vault = Vault::open(vault_dir).unwrap();
+        let link = root.join("link_to_src");
+        std::os::unix::fs::symlink(&src, &link).unwrap();
+        let policy = sc_safety_engine::SafetyPolicy::default();
+        let opts = PreflightOptions::new(&policy, RequestedAction::AutoQuarantine);
+        let err = vault.quarantine_guarded(&link, &opts).unwrap_err();
+        match err {
+            GuardedQuarantineError::Preflight(PreflightError::SymlinkBlocked(_)) => {}
+            other => panic!("expected SymlinkBlocked, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lower_level_quarantine_cannot_bypass_preflight_gate() {
+        let (_root, _src, vault_dir) = setup("bypass_test");
+        let mut vault = Vault::open(vault_dir.clone()).unwrap();
+        let res = vault.quarantine(&vault_dir, meta(&vault_dir));
+        assert!(res.is_err());
     }
 }

@@ -191,6 +191,40 @@ pub fn assess(record: &FileRecord, ctx: &AssessContext) -> RiskAssessment {
         });
     }
 
+    if let Some(attr) = record.windows_attributes {
+        if attr.is_readonly {
+            f.push(RiskFactor {
+                rule: "READONLY_ATTRIBUTE",
+                delta: 15,
+            });
+        }
+        if attr.is_system {
+            f.push(RiskFactor {
+                rule: "SYSTEM_ATTRIBUTE",
+                delta: 25,
+            });
+        }
+    } else if record.is_system {
+        f.push(RiskFactor {
+            rule: "SYSTEM_ATTRIBUTE",
+            delta: 25,
+        });
+    }
+
+    if let Some(sig) = &record.signature {
+        if sig.status == sc_file_models::SignatureStatus::SignedInvalid {
+            f.push(RiskFactor {
+                rule: "INVALID_SIGNATURE",
+                delta: 35,
+            });
+        } else if sig.status == sc_file_models::SignatureStatus::SignedUnknown {
+            f.push(RiskFactor {
+                rule: "UNVERIFIED_SIGNATURE",
+                delta: 20,
+            });
+        }
+    }
+
     if record.is_pe {
         if record.content_kind == ContentKind::Installer {
             // Installers are self-extracting archives: lower (but not zero) risk.
@@ -416,5 +450,57 @@ mod tests {
         let text = a.explanation();
         assert!(text.contains("TEMP_PATH"));
         assert!(text.contains("temporary folder"));
+    }
+
+    #[test]
+    fn invalid_signed_pe_has_invalid_signature_factor() {
+        let mut r = rec("C:\\app\\corrupt.exe", ContentKind::Executable, 10);
+        r.is_pe = true;
+        r.signature = Some(sc_file_models::SignatureInfo::signed_invalid(
+            sc_file_models::TrustStatus::BadDigest,
+            Some(0x80096010),
+            "Tampered",
+            None,
+        ));
+        let ctx = AssessContext { now: NOW };
+        let a = assess(&r, &ctx);
+        assert!(a.factors.iter().any(|f| f.rule == "INVALID_SIGNATURE"));
+    }
+
+    #[test]
+    fn unverified_signature_pe_has_unverified_factor() {
+        let mut r = rec("C:\\app\\unknown.exe", ContentKind::Executable, 10);
+        r.is_pe = true;
+        r.signature = Some(sc_file_models::SignatureInfo {
+            status: sc_file_models::SignatureStatus::SignedUnknown,
+            is_pe: true,
+            trust_status: sc_file_models::TrustStatus::UnknownTrust,
+            ..Default::default()
+        });
+        let ctx = AssessContext { now: NOW };
+        let a = assess(&r, &ctx);
+        assert!(a.factors.iter().any(|f| f.rule == "UNVERIFIED_SIGNATURE"));
+    }
+
+    #[test]
+    fn readonly_attribute_raises_risk() {
+        let mut r = rec("C:\\app\\file.txt", ContentKind::Document, 10);
+        r.windows_attributes = Some(sc_file_models::WindowsAttributes {
+            is_readonly: true,
+            ..Default::default()
+        });
+        let ctx = AssessContext { now: NOW };
+        let a = assess(&r, &ctx);
+        assert!(a.factors.iter().any(|f| f.rule == "READONLY_ATTRIBUTE"));
+    }
+
+    #[test]
+    fn system_attribute_raises_risk_to_review_not_never_delete() {
+        let mut r = rec("C:\\app\\file.txt", ContentKind::Document, 10);
+        r.is_system = true;
+        let ctx = AssessContext { now: NOW };
+        let a = assess(&r, &ctx);
+        assert!(a.factors.iter().any(|f| f.rule == "SYSTEM_ATTRIBUTE"));
+        assert_ne!(a.score, 100);
     }
 }

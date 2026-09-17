@@ -15,6 +15,16 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+pub mod attributes;
+pub mod authenticode;
+pub mod elevation;
+pub mod software_registry;
+
+pub use attributes::*;
+pub use authenticode::*;
+pub use elevation::*;
+pub use software_registry::*;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanMode {

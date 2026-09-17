@@ -8,3 +8,5 @@ description = "Shared data models for the Smart Cleaner native core"
 
 [dependencies]
 serde = { workspace = true }
+serde_json = { workspace = true }
+

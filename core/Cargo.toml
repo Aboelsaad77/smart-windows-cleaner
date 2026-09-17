@@ -9,6 +9,7 @@ members = [
     "crates/db",
     "crates/ai-gateway",
     "crates/cli",
+    "crates/local-rules",
 ]
 
 [workspace.package]
@@ -24,6 +25,7 @@ sha2 = "0.10"
 uuid = { version = "1", features = ["v4", "serde"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 fs2 = "0.4"
+libc = "0.2"
 
 sc-file-models = { path = "crates/file-models" }
 sc-risk-engine = { path = "crates/risk-engine" }
@@ -32,6 +34,7 @@ sc-quarantine = { path = "crates/quarantine" }
 sc-scanner = { path = "crates/scanner" }
 sc-db = { path = "crates/db" }
 sc-ai-gateway = { path = "crates/ai-gateway" }
+sc-local-rules = { path = "crates/local-rules" }
 
 [profile.release]
 lto = true

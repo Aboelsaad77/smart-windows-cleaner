@@ -8,6 +8,16 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub mod rules;
+pub mod signature;
+pub mod software;
+pub mod ipc;
+
+pub use rules::*;
+pub use signature::*;
+pub use software::*;
+pub use ipc::*;
+
 /// Coarse class of a scanned item.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -96,6 +106,8 @@ pub struct FileRecord {
     pub is_hidden: bool,
     pub is_system: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_attributes: Option<WindowsAttributes>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
@@ -109,6 +121,8 @@ pub struct FileRecord {
     pub is_signed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signed_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<SignatureInfo>,
     /// Located in a protected Windows component path (System32, WinSxS, ...).
     pub is_windows_component: bool,
     /// Locked / currently used by a running process.
@@ -116,7 +130,66 @@ pub struct FileRecord {
     /// Installed application this file belongs to (software awareness).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_app: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub software_attribution: Option<SoftwareAttribution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rule_evidences: Vec<RuleEvidence>,
     pub content_kind: ContentKind,
+}
+
+/// Windows filesystem attributes (spec §2; Milestone M1 Component #2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct WindowsAttributes {
+    pub raw: u32,
+    pub is_readonly: bool,
+    pub is_hidden: bool,
+    pub is_system: bool,
+    pub is_directory: bool,
+    pub is_archive: bool,
+    pub is_normal: bool,
+    pub is_temporary: bool,
+    pub is_sparse: bool,
+    pub is_reparse_point: bool,
+    pub is_compressed: bool,
+    pub is_offline: bool,
+    pub is_not_content_indexed: bool,
+    pub is_encrypted: bool,
+}
+
+impl WindowsAttributes {
+    pub const READONLY: u32 = 0x00000001;
+    pub const HIDDEN: u32 = 0x00000002;
+    pub const SYSTEM: u32 = 0x00000004;
+    pub const DIRECTORY: u32 = 0x00000010;
+    pub const ARCHIVE: u32 = 0x00000020;
+    pub const DEVICE: u32 = 0x00000040;
+    pub const NORMAL: u32 = 0x00000080;
+    pub const TEMPORARY: u32 = 0x00000100;
+    pub const SPARSE_FILE: u32 = 0x00000200;
+    pub const REPARSE_POINT: u32 = 0x00000400;
+    pub const COMPRESSED: u32 = 0x00000800;
+    pub const OFFLINE: u32 = 0x00001000;
+    pub const NOT_CONTENT_INDEXED: u32 = 0x00002000;
+    pub const ENCRYPTED: u32 = 0x00004000;
+
+    pub fn from_raw(raw: u32) -> Self {
+        Self {
+            raw,
+            is_readonly: (raw & Self::READONLY) != 0,
+            is_hidden: (raw & Self::HIDDEN) != 0,
+            is_system: (raw & Self::SYSTEM) != 0,
+            is_directory: (raw & Self::DIRECTORY) != 0,
+            is_archive: (raw & Self::ARCHIVE) != 0,
+            is_normal: (raw & Self::NORMAL) != 0,
+            is_temporary: (raw & Self::TEMPORARY) != 0,
+            is_sparse: (raw & Self::SPARSE_FILE) != 0,
+            is_reparse_point: (raw & Self::REPARSE_POINT) != 0,
+            is_compressed: (raw & Self::COMPRESSED) != 0,
+            is_offline: (raw & Self::OFFLINE) != 0,
+            is_not_content_indexed: (raw & Self::NOT_CONTENT_INDEXED) != 0,
+            is_encrypted: (raw & Self::ENCRYPTED) != 0,
+        }
+    }
 }
 
 impl FileRecord {
@@ -524,5 +597,266 @@ mod tests {
         let mut short = build_pe(pe::AMD64, 0x20b);
         short.truncate(0x40);
         assert!(!pe::inspect(&short).is_pe);
+    }
+
+    #[test]
+    fn windows_attributes_normal_file() {
+        let attr = WindowsAttributes::from_raw(WindowsAttributes::NORMAL);
+        assert!(attr.is_normal);
+        assert!(!attr.is_hidden);
+        assert!(!attr.is_system);
+        assert_eq!(attr.raw, WindowsAttributes::NORMAL);
+    }
+
+    #[test]
+    fn windows_attributes_hidden_file() {
+        let attr = WindowsAttributes::from_raw(WindowsAttributes::HIDDEN);
+        assert!(attr.is_hidden);
+        assert!(!attr.is_system);
+    }
+
+    #[test]
+    fn windows_attributes_system_flagged_file() {
+        let attr = WindowsAttributes::from_raw(WindowsAttributes::SYSTEM);
+        assert!(attr.is_system);
+        assert!(!attr.is_hidden);
+    }
+
+    #[test]
+    fn windows_attributes_both_flags() {
+        let raw = WindowsAttributes::HIDDEN | WindowsAttributes::SYSTEM;
+        let attr = WindowsAttributes::from_raw(raw);
+        assert!(attr.is_hidden);
+        assert!(attr.is_system);
+    }
+
+    #[test]
+    fn windows_attributes_extensible_flags() {
+        let raw = WindowsAttributes::READONLY | WindowsAttributes::ARCHIVE | WindowsAttributes::TEMPORARY | WindowsAttributes::REPARSE_POINT;
+        let attr = WindowsAttributes::from_raw(raw);
+        assert!(attr.is_readonly);
+        assert!(attr.is_archive);
+        assert!(attr.is_temporary);
+        assert!(attr.is_reparse_point);
+    }
+
+    #[test]
+    fn windows_attributes_display_formatting() {
+        let attr = WindowsAttributes::from_raw(WindowsAttributes::NORMAL);
+        let serialized = serde_json::to_string(&attr).unwrap();
+        let deserialized: WindowsAttributes = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(attr, deserialized);
+    }
+
+    #[test]
+    fn signature_model_unsigned_pe() {
+        let s = SignatureInfo::unsigned(true);
+        assert!(s.is_pe);
+        assert!(s.is_unsigned());
+        assert!(!s.has_signature());
+    }
+
+    #[test]
+    fn signature_model_signed_valid() {
+        let s = SignatureInfo::signed_valid(Some("Microsoft Corporation".into()));
+        assert!(s.is_pe);
+        assert!(s.is_signed_valid());
+        assert!(s.has_signature());
+        assert_eq!(s.signer_name.as_deref(), Some("Microsoft Corporation"));
+    }
+
+    #[test]
+    fn signature_model_signed_invalid_baddigest() {
+        let s = SignatureInfo::signed_invalid(TrustStatus::BadDigest, Some(0x80096010), "Bad digest", Some("Untrusted".into()));
+        assert!(s.is_pe);
+        assert!(!s.is_signed_valid());
+        assert!(s.has_signature());
+        assert_eq!(s.trust_status, TrustStatus::BadDigest);
+    }
+
+    #[test]
+    fn signature_model_not_pe() {
+        let s = SignatureInfo::not_pe();
+        assert!(!s.is_pe);
+        assert_eq!(s.trust_status, TrustStatus::NotApplicable);
+    }
+
+    #[test]
+    fn signature_model_unsupported_platform() {
+        let s = SignatureInfo::unsupported_platform(true);
+        assert_eq!(s.status, SignatureStatus::UnsupportedPlatform);
+    }
+
+    #[test]
+    fn signature_model_verification_error() {
+        let s = SignatureInfo::verification_error(true, Some(5), "Access denied");
+        assert_eq!(s.status, SignatureStatus::VerificationError);
+    }
+
+    #[test]
+    fn software_model_merge_preserves_stronger_fields() {
+        let mut app1 = SoftwareRecord {
+            display_name: "App".into(),
+            publisher: None,
+            display_version: None,
+            install_location: None,
+            uninstall_string: None,
+            quiet_uninstall_string: None,
+            install_date: None,
+            estimated_size_kb: None,
+            architecture: RegistryView::View32Bit,
+            registry_source: "HKLM".into(),
+            scope: SoftwareScope::MachineWide,
+        };
+        let app2 = SoftwareRecord {
+            display_name: "App".into(),
+            publisher: Some("Vendor".into()),
+            display_version: Some("1.0.0".into()),
+            install_location: Some(PathBuf::from("C:\\App")),
+            uninstall_string: None,
+            quiet_uninstall_string: None,
+            install_date: None,
+            estimated_size_kb: Some(1024),
+            architecture: RegistryView::View64Bit,
+            registry_source: "HKLM".into(),
+            scope: SoftwareScope::MachineWide,
+        };
+        app1.merge(app2);
+        assert_eq!(app1.publisher.as_deref(), Some("Vendor"));
+        assert_eq!(app1.display_version.as_deref(), Some("1.0.0"));
+        assert_eq!(app1.architecture, RegistryView::View64Bit);
+    }
+
+    #[test]
+    fn attribution_confidence_ordering_and_authoritativeness() {
+        assert!(AttributionConfidence::ExactInstallLocation > AttributionConfidence::ExecutableMatch);
+        assert!(AttributionConfidence::ExecutableMatch > AttributionConfidence::StrongPathMatch);
+        assert!(AttributionConfidence::StrongPathMatch > AttributionConfidence::WeakHeuristic);
+        assert!(AttributionConfidence::WeakHeuristic > AttributionConfidence::Unknown);
+    }
+
+    #[test]
+    fn ipc_request_roundtrip_command() {
+        let req = IpcRequest {
+            id: "cmd-1".into(),
+            payload: IpcPayload::StartScan(StartScanCommand {
+                mode: "smart".into(),
+                roots: vec![PathBuf::from("C:\\Test")],
+                extra_exclusions: vec![],
+            }),
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        let parsed: IpcRequest = serde_json::from_str(&s).unwrap();
+        assert_eq!(req.id, parsed.id);
+    }
+
+    #[test]
+    fn ipc_request_roundtrip_query() {
+        let req = IpcRequest {
+            id: "q-1".into(),
+            payload: IpcPayload::GetSystemStatus,
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        let parsed: IpcRequest = serde_json::from_str(&s).unwrap();
+        assert_eq!(req.id, parsed.id);
+    }
+
+    #[test]
+    fn ipc_response_error_structure() {
+        let resp = IpcResponse {
+            id: "cmd-1".into(),
+            status: ResponseStatus::Error,
+            data: None,
+            error: Some(IpcError {
+                code: "PERMISSION_DENIED".into(),
+                message: "Elevation required".into(),
+                details: None,
+            }),
+        };
+        assert_eq!(resp.status, ResponseStatus::Error);
+        assert_eq!(resp.error.unwrap().code, "PERMISSION_DENIED");
+    }
+
+    #[test]
+    fn ipc_event_streaming_serialization() {
+        let evt = IpcEvent::ScanProgress {
+            session_id: "sess-1".into(),
+            elapsed_ms: 50,
+            entries_scanned: 100,
+            files_scanned: 90,
+            dirs_scanned: 10,
+            current_path: PathBuf::from("C:\\Temp"),
+            current_category: None,
+            candidates_found: 5,
+            estimated_reclaimable_bytes: 10240,
+        };
+        let s = serde_json::to_string(&evt).unwrap();
+        assert!(s.contains("scan_progress"));
+    }
+
+    #[test]
+    fn candidate_explainability_dto_serialization() {
+        let dto = CandidateExplainabilityDto {
+            name: "junk.tmp".into(),
+            path: PathBuf::from("C:\\Temp\\junk.tmp"),
+            size: 512,
+            file_class: FileClass::RegularFile,
+            extension: Some("tmp".into()),
+            content_kind: ContentKind::Temp,
+            owner_app: None,
+            attribution_confidence: None,
+            modified_at: 100,
+            age_days: 1,
+            is_hidden: false,
+            is_system_attribute: false,
+            is_pe: false,
+            signature_status: SignatureStatus::Unsigned,
+            signature_trust: TrustStatus::NoSignature,
+            signer_name: None,
+            risk_score: 5,
+            risk_band: RiskBand::VerySafe,
+            risk_factors: vec![],
+            local_rules: vec![],
+            safety_verdict: "auto_quarantine".into(),
+            can_quarantine: true,
+            requires_user_confirm: false,
+            is_blocked: false,
+            blocked_reasons: vec![],
+            allowed_reasons: vec!["safe".into()],
+        };
+        let s = serde_json::to_string(&dto).unwrap();
+        let parsed: CandidateExplainabilityDto = serde_json::from_str(&s).unwrap();
+        assert_eq!(dto.path, parsed.path);
+    }
+
+    #[test]
+    fn rule_category_labels_and_winsxs_evidence() {
+        assert_eq!(RuleCategory::WindowsTemp.label(), "WINDOWS_TEMP");
+        assert_eq!(RuleCategory::WinSxSComponentStore.label(), "WINSXS_COMPONENT_STORE");
+        let evidence = RuleEvidence {
+            rule_id: "WINSXS_STORE".into(),
+            category: RuleCategory::WinSxSComponentStore,
+            matched_pattern: "*\\winsxs\\*".into(),
+            reason: "Component store".into(),
+            confidence: RuleConfidence::High,
+            reclaimable_size: 0,
+            safety_implications: "Servicing store".into(),
+        };
+        assert!(evidence.is_winsxs());
+    }
+
+    #[test]
+    fn signature_info_has_signature_matrix() {
+        assert!(SignatureInfo::signed_valid(None).has_signature());
+        assert!(SignatureInfo::signed_invalid(TrustStatus::Expired, Some(1), "Expired", None).has_signature());
+        let unknown = SignatureInfo {
+            status: SignatureStatus::SignedUnknown,
+            is_pe: true,
+            trust_status: TrustStatus::UnknownTrust,
+            ..Default::default()
+        };
+        assert!(unknown.has_signature());
+        assert!(!SignatureInfo::unsigned(true).has_signature());
+        assert!(!SignatureInfo::not_pe().has_signature());
     }
 }

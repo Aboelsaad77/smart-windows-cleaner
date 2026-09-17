@@ -16,6 +16,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+pub mod preflight;
+pub use preflight::*;
+
 /// Normalized Windows directory (e.g. `"c:\\windows"`). Audit F5: Windows is
 /// not guaranteed to live on C:, so callers on Windows should fill this from
 /// `WINDIR` (the scanner's platform layer does); the default is the common
@@ -159,12 +162,6 @@ pub fn enforce(
         assessment.score
     ));
 
-    // UnknownExecutable => NEVER_AUTO_DELETE (spec §6)
-    if record.is_pe && !record.is_signed && verdict == SafetyVerdict::AutoQuarantine {
-        verdict = SafetyVerdict::UserConfirm;
-        notes.push("Unsigned executable: automatic cleanup disabled".into());
-    }
-
     // ---- bounded AI second opinion (spec §7, §23) ----
     // The AI can only move a decision *toward* quarantine for Review-band
     // items. It can never unblock a hard rule and can never trigger deletion.
@@ -174,6 +171,7 @@ pub fn enforce(
             && sig.recommendation.as_deref() == Some("QUARANTINE")
             && verdict == SafetyVerdict::UserConfirm
             && assessment.band == RiskBand::Review
+            && !(record.is_pe && !record.is_signed)
         {
             verdict = SafetyVerdict::AutoQuarantine;
             notes.push(format!(
@@ -188,6 +186,12 @@ pub fn enforce(
                 sig.reason.clone().unwrap_or_default()
             ));
         }
+    }
+
+    // UnknownExecutable => NEVER_AUTO_DELETE (spec §6)
+    if record.is_pe && !record.is_signed && verdict == SafetyVerdict::AutoQuarantine {
+        verdict = SafetyVerdict::UserConfirm;
+        notes.push("Unsigned executable: automatic cleanup disabled".into());
     }
 
     SafetyDecision {
@@ -415,5 +419,79 @@ mod tests {
         let d = enforce(&r, &a, &SafetyPolicy::default(), None);
         assert_eq!(d.verdict, SafetyVerdict::NeverDelete);
         assert!(d.blocked_rules.contains(&"SIGNED_CRITICAL_BINARY"));
+    }
+
+    #[test]
+    fn winsxs_component_store_is_permanently_never_delete() {
+        let r = FileRecord::new("C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicing_31bf3856ad364e35\\servicing.dll", 100, NOW);
+        let a = local(&r);
+        let d = enforce(&r, &a, &SafetyPolicy::default(), None);
+        assert_eq!(d.verdict, SafetyVerdict::NeverDelete);
+        assert!(d.blocked_rules.contains(&"WINDOWS_PROTECTED_PATH"));
+    }
+
+    #[test]
+    fn winsxs_path_with_custom_windir_is_protected() {
+        let r = FileRecord::new("D:\\Windows\\WinSxS\\amd64_somefile", 100, NOW);
+        let a = local(&r);
+        let mut policy = SafetyPolicy::default();
+        policy.windir = "d:\\windows".into();
+        let d = enforce(&r, &a, &policy, None);
+        assert_eq!(d.verdict, SafetyVerdict::NeverDelete);
+        assert!(d.blocked_rules.contains(&"WINDOWS_PROTECTED_PATH"));
+    }
+
+    #[test]
+    fn safety_engine_cannot_be_bypassed_by_software_attribution() {
+        let mut r = FileRecord::new("C:\\Windows\\System32\\critical.dll", 100, NOW);
+        r.owner_app = Some("SomeSafeApp".into());
+        let a = local(&r);
+        let d = enforce(&r, &a, &SafetyPolicy::default(), None);
+        assert_eq!(d.verdict, SafetyVerdict::NeverDelete);
+    }
+
+    #[test]
+    fn unsigned_pe_in_temp_never_becomes_auto_quarantine() {
+        let mut r = temp_rec();
+        r.is_pe = true;
+        r.is_signed = false;
+        let a = synth(10); // VerySafe
+        let d = enforce(&r, &a, &SafetyPolicy::default(), None);
+        assert_eq!(d.verdict, SafetyVerdict::UserConfirm);
+    }
+
+    #[test]
+    fn invalid_signed_pe_cannot_be_promoted_by_ai() {
+        let mut r = temp_rec();
+        r.is_pe = true;
+        r.is_signed = false;
+        let a = synth(55); // Review
+        let ai_signal = ai("QUARANTINE", 0.99);
+        let mut policy = SafetyPolicy::default();
+        policy.allow_ai_second_opinion = true;
+        let d = enforce(&r, &a, &policy, Some(&ai_signal));
+        assert_ne!(d.verdict, SafetyVerdict::AutoQuarantine);
+    }
+
+    #[test]
+    fn structured_signed_valid_critical_driver_reaches_never_delete() {
+        let mut r = FileRecord::new("C:\\Windows\\System32\\drivers\\safe.sys", 100, NOW);
+        r.is_pe = true;
+        r.is_signed = true;
+        r.is_driver = true;
+        let a = local(&r);
+        let d = enforce(&r, &a, &SafetyPolicy::default(), None);
+        assert_eq!(d.verdict, SafetyVerdict::NeverDelete);
+    }
+
+    #[test]
+    fn structured_signed_valid_userland_installer_remains_user_confirm() {
+        let mut r = FileRecord::new("C:\\Downloads\\installer.exe", 100, NOW - 100 * 86_400);
+        r.is_pe = true;
+        r.is_signed = true;
+        r.content_kind = ContentKind::Installer;
+        let a = synth(55);
+        let d = enforce(&r, &a, &SafetyPolicy::default(), None);
+        assert_eq!(d.verdict, SafetyVerdict::UserConfirm);
     }
 }
