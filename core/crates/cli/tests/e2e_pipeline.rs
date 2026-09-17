@@ -30,7 +30,9 @@
 
 use fs2::FileExt;
 use sc_db::{AuditEntry, Db};
-use sc_file_models::{now_secs, FileClass, RiskBand};
+use sc_file_models::{now_secs, RiskBand};
+#[cfg(unix)]
+use sc_file_models::FileClass;
 use sc_quarantine::{
     GuardedQuarantineError, ItemStatus, PreflightError, PreflightOptions, RequestedAction, Vault,
     VaultError,
@@ -69,7 +71,9 @@ struct TestEnv {
     protected_dll_file: PathBuf,
     drift_target_file: PathBuf,
     locked_file: PathBuf,
+    #[allow(dead_code)]
     important_doc_file: PathBuf,
+    #[allow(dead_code)]
     symlink_file: PathBuf,
     safe_content: Vec<u8>,
 }
