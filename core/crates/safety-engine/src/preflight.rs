@@ -560,15 +560,21 @@ mod tests {
 
     #[test]
     fn demoted_verdict_demands_confirmation() {
-        let path = tmp_file("demoted", b"not a temp");
-        let policy = SafetyPolicy::default();
-        // Create an executable file:
-        let exe_path = path.parent().unwrap().join("fresh_prog.exe");
+        let dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("sc-preflight-demoted-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let exe_path = dir.join("fresh_prog.exe");
         fs::write(&exe_path, b"raw non-pe binary data").unwrap();
 
-        // Attempting AutoQuarantine on an unknown executable must require user confirmation
+        let policy = SafetyPolicy::default();
+        // Attempting AutoQuarantine on an unknown executable outside temp folders
+        // evaluates to Review band (UserConfirm) and must demand user confirmation.
         let opts = PreflightOptions::new(&policy, RequestedAction::AutoQuarantine);
         let err = revalidate(&exe_path, &opts).unwrap_err();
         assert!(matches!(err, PreflightError::ConfirmationRequired { .. }));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
