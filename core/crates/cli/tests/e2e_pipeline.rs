@@ -30,9 +30,9 @@
 
 use fs2::FileExt;
 use sc_db::{AuditEntry, Db};
-use sc_file_models::{now_secs, RiskBand};
 #[cfg(unix)]
 use sc_file_models::FileClass;
+use sc_file_models::{now_secs, RiskBand};
 use sc_quarantine::{
     GuardedQuarantineError, ItemStatus, PreflightError, PreflightOptions, RequestedAction, Vault,
     VaultError,
