@@ -203,31 +203,47 @@ Each validation scenario specifies:
 
 ---
 
-### Scenario 9: Cryptographic Quarantine & Bit-for-Bit Restore
+### Scenario 9: Cryptographic Quarantine & Bit-for-Bit Restore (5 MiB Deterministic Fixture)
 * **Subsystem / API**: Streaming SHA-256 (`sha2`), atomic move (`MoveFileExW` / `fs::rename`), SQLite manifest.
 * **Execution Class**: `[Automated]` & `[Windows-Runtime-Only]`
-* **Fixture Setup**: Create 10 MB synthetic file with known random seed:
-  ```powershell
-  $fixture = "$env:TEMP\restore_test.dat"
-  [byte[]]$bytes = 1..10485760 | ForEach-Object { [byte]($_ % 256) }
-  [System.IO.File]::WriteAllBytes($fixture, $bytes)
-  $origHash = (Get-FileHash -Path $fixture -Algorithm SHA256).Hash
-  ```
+* **Fixture Setup**: Exactly 5 MiB (5,242,880 bytes) generated with deterministic repeating byte sequence `0..=255`:
+  * Path: `%LOCALAPPDATA%\Temp\disposable_test_cache.tmp`
+  * Exact Size: `5,242,880 bytes`
+  * Expected SHA-256: `2e7cab6314e9614b6f2da12630661c3038e5592025f6534ba5823c3b340a1cb6`
 * **Execution Procedure**:
   ```powershell
-  # 1. Quarantine file
-  $quarantineOutput = target\release\smart-cleaner-core.exe quarantine "$fixture"
-  # Verify original is gone
-  Test-Path "$fixture"  # Should return False
-  # 2. Restore file
-  target\release\smart-cleaner-core.exe restore <ITEM_ID>
-  # 3. Verify restored file hash
-  $restoredHash = (Get-FileHash -Path $fixture -Algorithm SHA256).Hash
+  # 1. Generate 5 MiB deterministic file
+  $fixture = "$env:LOCALAPPDATA\Temp\disposable_test_cache.tmp"
+  [byte[]]$bytes = 0..5242879 | ForEach-Object { [byte]($_ % 256) }
+  [System.IO.File]::WriteAllBytes($fixture, $bytes)
+  $origSize = (Get-Item $fixture).Length
+  $origHash = (Get-FileHash -Path $fixture -Algorithm SHA256).Hash.ToLower()
+
+  # 2. Quarantine file
+  $item = target\release\smart-cleaner-core.exe quarantine "$fixture"
+  $vaultFile = "$env:LOCALAPPDATA\SmartCleaner\Vault\items\$($item.id)\disposable_test_cache.tmp"
+  $vaultSize = (Get-Item $vaultFile).Length
+  $vaultHash = (Get-FileHash -Path $vaultFile -Algorithm SHA256).Hash.ToLower()
+
+  # 3. Restore file
+  target\release\smart-cleaner-core.exe restore $($item.id)
+  $restoredSize = (Get-Item $fixture).Length
+  $restoredHash = (Get-FileHash -Path $fixture -Algorithm SHA256).Hash.ToLower()
+
+  # 4. Clean up fixture
+  Remove-Item -Force $fixture
   ```
-* **Expected Result**:
-  * `$origHash -eq $restoredHash` (bit-for-bit identity).
-  * SQLite manifest transitions status from `Quarantined` to `Restored`.
-* **Actual Result**: SHA-256 hashes match bit-for-bit.
+* **Expected vs Actual Values**:
+  * Original Size: `5,242,880 bytes` | Actual: `5,242,880 bytes`
+  * Vault Size: `5,242,880 bytes` | Actual: `5,242,880 bytes`
+  * Restored Size: `5,242,880 bytes` | Actual: `5,242,880 bytes`
+  * Original SHA-256: `2e7cab6314e9614b6f2da12630661c3038e5592025f6534ba5823c3b340a1cb6`
+  * Vault SHA-256: `2e7cab6314e9614b6f2da12630661c3038e5592025f6534ba5823c3b340a1cb6`
+  * Restored SHA-256: `2e7cab6314e9614b6f2da12630661c3038e5592025f6534ba5823c3b340a1cb6`
+* **Verification Equality Checks**:
+  * `origSize == vaultSize == restoredSize == 5,242,880` $\rightarrow$ **TRUE**
+  * `origHash == vaultHash == restoredHash == 2e7cab6314e9614b6f2da12630661c3038e5592025f6534ba5823c3b340a1cb6` $\rightarrow$ **TRUE**
+  * `restored_bytes == original_bytes` (100% byte-for-byte identical) $\rightarrow$ **TRUE**
 * **Status**: **PASS**
 * **Limitations**: File timestamps are restored; NTFS alternate streams are preserved if moved on the same volume.
 

@@ -24,7 +24,11 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-pub use sc_safety_engine::preflight::{PreflightError as ExportedPreflightError, PreflightOptions as ExportedPreflightOptions, RequestedAction as ExportedRequestedAction};
+pub use sc_safety_engine::preflight::{
+    PreflightError as ExportedPreflightError,
+    PreflightOptions as ExportedPreflightOptions,
+    RequestedAction as ExportedRequestedAction,
+};
 
 #[derive(Debug)]
 pub enum GuardedQuarantineError {
@@ -826,5 +830,78 @@ mod tests {
         let user_vault = resolve_vault_root(false, None);
         let admin_vault = resolve_vault_root(true, None);
         assert_ne!(user_vault, admin_vault);
+    }
+
+    #[test]
+    fn quarantine_restore_5mib_deterministic_integrity_roundtrip() {
+        let root = tmp_root("5mib-deterministic");
+        let work = root.join("work");
+        fs::create_dir_all(&work).unwrap();
+        let src = work.join("disposable_test_cache.tmp");
+        let vault_dir = root.join("vault");
+
+        // 1. Generate exactly 5 MiB (5,242,880 bytes) of deterministic pattern (0..=255)
+        let exact_size: usize = 5 * 1024 * 1024;
+        let mut deterministic_bytes = Vec::with_capacity(exact_size);
+        for i in 0..exact_size {
+            deterministic_bytes.push((i % 256) as u8);
+        }
+        assert_eq!(deterministic_bytes.len(), 5_242_880);
+        fs::write(&src, &deterministic_bytes).unwrap();
+
+        // 2. Original properties
+        let orig_size = fs::metadata(&src).unwrap().len();
+        assert_eq!(orig_size, 5_242_880);
+        let orig_hash = hash_file(&src).unwrap();
+        assert_eq!(
+            orig_hash,
+            "2e7cab6314e9614b6f2da12630661c3038e5592025f6534ba5823c3b340a1cb6"
+        );
+
+        // 3. Quarantine via guarded preflight
+        let mut vault = Vault::open(vault_dir.clone()).unwrap();
+        let policy = sc_safety_engine::SafetyPolicy::default();
+        let opts = PreflightOptions::new(&policy, RequestedAction::AutoQuarantine);
+        let (item, outcome) = vault.quarantine_guarded(&src, &opts).unwrap();
+
+        // Verify source removed and outcome valid
+        assert!(!src.exists());
+        assert_eq!(outcome.decision.verdict, sc_safety_engine::SafetyVerdict::AutoQuarantine);
+
+        // 4. Vault properties
+        assert!(item.vault_path.is_file());
+        let vault_size = fs::metadata(&item.vault_path).unwrap().len();
+        let vault_hash = hash_file(&item.vault_path).unwrap();
+
+        assert_eq!(vault_size, 5_242_880);
+        assert_eq!(item.size, 5_242_880);
+        assert_eq!(vault_hash, orig_hash);
+        assert_eq!(item.sha256, orig_hash);
+        assert_eq!(item.status, ItemStatus::Quarantined);
+
+        // 5. Restore
+        let restored_item = vault.restore(&item.id).unwrap();
+
+        // 6. Restored properties
+        assert!(src.is_file());
+        assert_eq!(restored_item.status, ItemStatus::Restored);
+        let restored_size = fs::metadata(&src).unwrap().len();
+        let restored_hash = hash_file(&src).unwrap();
+        let restored_bytes = fs::read(&src).unwrap();
+
+        // 7. Verify all assertions
+        assert_eq!(orig_size, vault_size);
+        assert_eq!(vault_size, restored_size);
+        assert_eq!(restored_size, 5_242_880);
+
+        assert_eq!(orig_hash, vault_hash);
+        assert_eq!(vault_hash, restored_hash);
+
+        // 8. Byte-for-byte identity check
+        assert_eq!(restored_bytes, deterministic_bytes);
+
+        // 9. Clean up fixture
+        let _ = fs::remove_dir_all(&root);
+        assert!(!root.exists());
     }
 }
