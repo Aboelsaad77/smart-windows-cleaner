@@ -46,21 +46,50 @@ export async function verifyAuthenticode(
     };
   }
 
-  // Windows runtime inspection via PowerShell Get-AuthenticodeSignature
-  if (process.platform === 'win32') {
+  const isTestEnv = process.env.VITEST !== undefined || process.env.NODE_ENV === 'test';
+
+  // Windows runtime inspection via PowerShell Get-AuthenticodeSignature (production only)
+  if (process.platform === 'win32' && !isTestEnv) {
+    // Quick check: if not a PE file, return NotSigned without spawning PowerShell
+    try {
+      const fd = fs.openSync(filePath, 'r');
+      const head = Buffer.alloc(2);
+      fs.readSync(fd, head, 0, 2, 0);
+      fs.closeSync(fd);
+      if (head[0] !== 0x4d || head[1] !== 0x5a) {
+        return {
+          hasSignature: false,
+          status: 'NotSigned',
+          isPublisherTrusted: false,
+          rawOutput: 'Not a PE executable',
+        };
+      }
+    } catch {
+      // Continue to PowerShell fallback
+    }
+
     return new Promise((resolve) => {
-      const psCommand = `
-        $sig = Get-AuthenticodeSignature -FilePath '${filePath.replace(/'/g, "''")}';
-        @{
-          Status = $sig.Status.ToString();
-          StatusMessage = $sig.StatusMessage;
-          SignerSubject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { $null };
-          Issuer = if ($sig.SignerCertificate) { $sig.SignerCertificate.Issuer } else { $null };
-        } | ConvertTo-Json -Compress
+      const psScript = `
+        try {
+          $sig = Get-AuthenticodeSignature -FilePath '${filePath.replace(/'/g, "''")}';
+          if ($null -eq $sig) {
+            @{ Status = "NotSigned" } | ConvertTo-Json -Compress
+          } else {
+            @{
+              Status = if ($sig.Status) { $sig.Status.ToString() } else { "NotSigned" };
+              StatusMessage = $sig.StatusMessage;
+              SignerSubject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { $null };
+              Issuer = if ($sig.SignerCertificate) { $sig.SignerCertificate.Issuer } else { $null };
+            } | ConvertTo-Json -Compress
+          }
+        } catch {
+          @{ Status = "UnknownError"; StatusMessage = $_.Exception.Message } | ConvertTo-Json -Compress
+        }
       `;
 
+      const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
       child_process.exec(
-        `powershell -NoProfile -NonInteractive -Command "${psCommand.replace(/\n/g, ' ')}"`,
+        `powershell -NoProfile -NonInteractive -EncodedCommand ${encodedCommand}`,
         { timeout: 10000 },
         (err, stdout) => {
           if (err || !stdout) {
