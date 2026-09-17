@@ -162,7 +162,7 @@ fn inspect_windows_token() -> ElevationStatus {
     struct TokenGuard(HANDLE);
     impl Drop for TokenGuard {
         fn drop(&mut self) {
-            if !self.0.is_null() && self.0 != -1 as isize as HANDLE {
+            if !self.0.is_null() && self.0 != -1_isize as HANDLE {
                 unsafe {
                     CloseHandle(self.0);
                 }
