@@ -1,17 +1,28 @@
 [package]
 name = "sc-scanner"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-authors.workspace = true
-description = "Filesystem Discovery Engine — discover, analyze, report. Never deletes."
+version = "0.1.0"
+edition = "2021"
+description = "Fast Windows filesystem scanner with metadata cache, reparse point handling, and live-lock probing"
 
 [dependencies]
+ahash = "0.8"
+fs2 = { workspace = true }
 sc-file-models = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 
-[target.'cfg(unix)'.dependencies]
+[target."cfg(windows)".dependencies.windows-sys]
+version = "0.59"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
+]
+
+[target."cfg(unix)".dependencies]
 libc = { workspace = true }
 
+[dev-dependencies]
+tempfile = "3"

@@ -174,7 +174,6 @@ fn inspect_windows_token() -> ElevationStatus {
     unsafe {
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) != 0 {
             let _token_guard = TokenGuard(token);
-
             // 1. Query TokenElevation
             let mut elev = TOKEN_ELEVATION {
                 TokenIsElevated: 0,

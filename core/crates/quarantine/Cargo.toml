@@ -1,19 +1,21 @@
 [package]
 name = "sc-quarantine"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-authors.workspace = true
-description = "Reversible-delete vault: quarantine, restore, retention, purge"
+version = "0.1.0"
+edition = "2021"
+description = "Reversible-delete vault with manifest tracking and SHA-256 verification"
 
 [dependencies]
 fs2 = { workspace = true }
 sc-file-models = { workspace = true }
+sc-risk-engine = { workspace = true }
 sc-safety-engine = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 uuid = { workspace = true }
 
+[dev-dependencies]
+tempfile = "3"
+
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc = { workspace = true }

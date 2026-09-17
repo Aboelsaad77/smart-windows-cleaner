@@ -1,10 +1,8 @@
 [package]
 name = "sc-cli"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-authors.workspace = true
-description = "Command-line frontend for the Smart Cleaner core (future sidecar)"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line frontend for the Smart Cleaner engine"
 
 [[bin]]
 name = "sc-cleaner"
@@ -23,4 +21,3 @@ fs2 = { workspace = true }
 sha2 = { workspace = true }
 rusqlite = { workspace = true }
 tempfile = "3"
-

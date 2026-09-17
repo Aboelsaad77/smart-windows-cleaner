@@ -14,6 +14,9 @@
 //! ```
 
 use sc_file_models::{now_secs, RiskBand};
+pub use sc_safety_engine::preflight::{
+    self, PreflightError, PreflightOptions, PreflightOutcome, RequestedAction,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -21,11 +24,11 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-pub use sc_safety_engine::preflight::{PreflightError, PreflightOptions, RequestedAction};
+pub use sc_safety_engine::preflight::{PreflightError as ExportedPreflightError, PreflightOptions as ExportedPreflightOptions, RequestedAction as ExportedRequestedAction};
 
 #[derive(Debug)]
 pub enum GuardedQuarantineError {
-    Preflight(sc_safety_engine::PreflightError),
+    Preflight(PreflightError),
     Vault(VaultError),
 }
 
@@ -39,6 +42,18 @@ impl fmt::Display for GuardedQuarantineError {
 }
 
 impl std::error::Error for GuardedQuarantineError {}
+
+impl From<PreflightError> for GuardedQuarantineError {
+    fn from(e: PreflightError) -> Self {
+        GuardedQuarantineError::Preflight(e)
+    }
+}
+
+impl From<VaultError> for GuardedQuarantineError {
+    fn from(e: VaultError) -> Self {
+        GuardedQuarantineError::Vault(e)
+    }
+}
 
 pub const MANIFEST_FILE: &str = "vault.json";
 pub const ITEMS_DIR: &str = "items";
@@ -221,37 +236,54 @@ impl Vault {
         self.manifest.items.iter().find(|i| i.id == id)
     }
 
-    /// Guards the quarantine operation with the mandatory preflight gate.
+    /// Move a file into the vault.
+    ///
+    /// Even direct/lower-level quarantine calls MUST pass through the pre-flight gate.
+    /// Lower-level APIs cannot bypass the safety/preflight path.
+    pub fn quarantine(&mut self, src: &Path, meta: QuarantineMeta) -> VaultResult<QuarantineItem> {
+        let policy = sc_safety_engine::SafetyPolicy::default();
+        let action = if meta.risk_band <= RiskBand::Safe {
+            RequestedAction::AutoQuarantine
+        } else {
+            RequestedAction::UserConfirmed
+        };
+        let opts = PreflightOptions::new(&policy, action).with_vault_root(&self.root);
+        if let Err(e) = preflight::revalidate(src, &opts) {
+            return match e {
+                PreflightError::SourceMissing(p) => Err(VaultError::SourceMissing(p)),
+                PreflightError::UnderVaultRoot(p) => Err(VaultError::UnderVaultRoot(p)),
+                other => Err(VaultError::PreflightBlocked(other.to_string())),
+            };
+        }
+        self.quarantine_raw(src, meta)
+    }
+
+    /// Move a file into the vault after executing the mandatory pre-flight gate.
+    ///
+    /// Re-reads metadata, rejects symlinks/reparse points/directories, probes live
+    /// process locks (`is_in_use`), checks for state drift against scan-time snapshot,
+    /// and re-runs the risk and safety policy engine immediately before moving the file.
     pub fn quarantine_guarded(
         &mut self,
         src: &Path,
-        opts: &PreflightOptions,
-    ) -> Result<(QuarantineItem, sc_safety_engine::PreflightOutcome), GuardedQuarantineError> {
-        let mut full_opts = opts.clone();
-        full_opts.vault_root = Some(&self.root);
-        let outcome = sc_safety_engine::preflight::revalidate(src, &full_opts)
-            .map_err(GuardedQuarantineError::Preflight)?;
-
+        options: &PreflightOptions,
+    ) -> Result<(QuarantineItem, PreflightOutcome), GuardedQuarantineError> {
+        let mut opts = options.clone();
+        opts.vault_root = Some(&self.root);
+        let outcome = preflight::revalidate(src, &opts)?;
         let meta = QuarantineMeta {
             original_path: src.to_path_buf(),
             reason: outcome.decision.notes.join("; "),
-            risk_band: outcome.assessment.band,
             risk_score: outcome.assessment.score,
+            risk_band: outcome.assessment.band,
         };
-
-        let item = self.quarantine(src, meta)
-            .map_err(GuardedQuarantineError::Vault)?;
-
+        let item = self.quarantine_raw(src, meta)?;
         Ok((item, outcome))
     }
 
-    /// Move a file into the vault. Returns the created manifest entry.
-    ///
-    /// Audit F4: the manifest entry is written and saved *before* the file is
-    /// moved, so a crash mid-move leaves a recoverable record instead of an
-    /// un-restorable orphan. If the move fails, the entry is rolled back and
-    /// the source is left untouched.
-    pub fn quarantine(&mut self, src: &Path, meta: QuarantineMeta) -> VaultResult<QuarantineItem> {
+    /// Internal vault ingestion logic. Private to the vault crate so callers
+    /// can never bypass the preflight safety gate.
+    fn quarantine_raw(&mut self, src: &Path, meta: QuarantineMeta) -> VaultResult<QuarantineItem> {
         if !src.is_file() {
             return Err(VaultError::SourceMissing(src.to_path_buf()));
         }
@@ -474,18 +506,12 @@ pub fn hash_file(path: &Path) -> VaultResult<String> {
 /// `rename` when possible; on a *cross-device* rename (EXDEV) fall back to
 /// copy + delete. Any other rename failure (sharing violation, permissions,
 /// ...) is propagated untouched — the source must stay intact.
-///
-/// Audit F3: the fallback previously matched `ErrorKind::Other`, which also
-/// covers sharing violations on some platforms; that would copy the file and
-/// then fail to delete the locked source, leaving an unrecorded duplicate.
 fn move_file(src: &Path, dest: &Path) -> io::Result<()> {
     match fs::rename(src, dest) {
         Ok(()) => Ok(()),
         Err(e) if is_cross_device(&e) => {
             fs::copy(src, dest)?;
             if let Err(err) = fs::remove_file(src) {
-                // Never leave an unrecorded copy behind: undo it and surface
-                // the failure.
                 let _ = fs::remove_file(dest);
                 return Err(io::Error::new(
                     err.kind(),
@@ -498,9 +524,6 @@ fn move_file(src: &Path, dest: &Path) -> io::Result<()> {
     }
 }
 
-/// True only for the cross-device rename error. On Windows, std's `rename`
-/// already performs cross-volume moves (MOVEFILE_COPY_ALLOWED), so this
-/// effectively matters on Unix.
 fn is_cross_device(e: &io::Error) -> bool {
     #[cfg(unix)]
     {
@@ -579,7 +602,6 @@ mod tests {
         fs::remove_dir_all(parent).unwrap();
         let err = vault.restore(&item.id).unwrap_err();
         assert!(matches!(err, VaultError::DestinationInvalid(_)));
-        // cleanup so the parent test doesn't leak
         assert!(root.exists());
     }
 
@@ -598,7 +620,6 @@ mod tests {
         let (_root, src, vault_dir) = setup("double");
         let mut vault = Vault::open(vault_dir).unwrap();
         vault.quarantine(&src, meta(&src)).unwrap();
-        // put a file back at the original path to retry
         fs::create_dir_all(src.parent().unwrap()).unwrap();
         fs::write(&src, b"again").unwrap();
         let err = vault.quarantine(&src, meta(&src)).unwrap_err();
@@ -631,7 +652,6 @@ mod tests {
         let mut vault = Vault::open(vault_dir.clone()).unwrap();
         let item = vault.quarantine(&src, meta(&src)).unwrap();
         let manifest_path = vault_dir.join(MANIFEST_FILE);
-        // Age the item by 30 days via the on-disk manifest.
         let raw = fs::read_to_string(&manifest_path).unwrap();
         let mut m: serde_json::Value = serde_json::from_str(&raw).unwrap();
         for it in m["items"].as_array_mut().unwrap() {
@@ -655,12 +675,9 @@ mod tests {
         vault.purge(&item.id).unwrap();
         assert!(!item.vault_path.exists());
         assert_eq!(vault.find(&item.id).unwrap().status, ItemStatus::Purged);
-        // purging twice is a clean error
         let err = vault.purge(&item.id).unwrap_err();
         assert!(matches!(err, VaultError::NotQuarantined(_)));
     }
-
-    // ---- audit F4: manifest pre-save + rollback invariants ----
 
     #[cfg(unix)]
     #[test]
@@ -671,8 +688,6 @@ mod tests {
         }
         let (_root, src, vault_dir) = setup("rollback");
         let mut vault = Vault::open(vault_dir.clone()).unwrap();
-        // Make the items dir read-only so item-dir creation (and any move)
-        // fails. The invariant: no manifest entry, source untouched.
         use std::os::unix::fs::PermissionsExt;
         let items = vault_dir.join(ITEMS_DIR);
         fs::set_permissions(&items, fs::Permissions::from_mode(0o555)).unwrap();
@@ -681,7 +696,6 @@ mod tests {
         assert!(matches!(err, VaultError::Io(_)));
         assert!(vault.items().is_empty(), "no manifest entry may survive a failure");
         assert!(src.is_file(), "the source must stay intact");
-        // manifest on disk agrees with memory
         let on_disk = Vault::open(vault_dir).unwrap();
         assert!(on_disk.items().is_empty());
     }
@@ -691,19 +705,14 @@ mod tests {
         let (_root, src, vault_dir) = setup("orphans");
         let mut vault = Vault::open(vault_dir.clone()).unwrap();
         assert!(vault.recover_orphans().unwrap().is_empty());
-        // Simulate the pre-F4 crash: a file in items/<id>/ with no manifest
-        // entry.
         let orphan = vault_dir.join(ITEMS_DIR).join("deadbeef-dead-dead-dead-deadbeefdeadbe");
         fs::create_dir_all(&orphan).unwrap();
         fs::write(orphan.join("leftover.tmp"), b"orphan").unwrap();
-        // A legit item should NOT be reported.
         let item = vault.quarantine(&src, meta(&src)).unwrap();
         let orphans = vault.recover_orphans().unwrap();
         assert_eq!(orphans, vec![orphan.clone()]);
         assert_ne!(item.vault_path.parent().unwrap(), orphan.as_path());
     }
-
-    // ---- audit F3: cross-device detection is exact ----
 
     #[cfg(unix)]
     #[test]
@@ -712,7 +721,6 @@ mod tests {
         assert!(is_cross_device(&IoError::from_raw_os_error(libc::EXDEV)));
         assert!(!is_cross_device(&IoError::from_raw_os_error(libc::EACCES)));
         assert!(!is_cross_device(&IoError::from_raw_os_error(libc::ENOENT)));
-        // An io::Error without an OS code can never be EXDEV.
         assert!(!is_cross_device(&IoError::other("no os code")));
     }
 
@@ -792,10 +800,20 @@ mod tests {
 
     #[test]
     fn lower_level_quarantine_cannot_bypass_preflight_gate() {
-        let (_root, _src, vault_dir) = setup("bypass_test");
-        let mut vault = Vault::open(vault_dir.clone()).unwrap();
-        let res = vault.quarantine(&vault_dir, meta(&vault_dir));
-        assert!(res.is_err());
+        let (_root, src, vault_dir) = setup("lower-level-bypass");
+        let mut vault = Vault::open(vault_dir).unwrap();
+
+        // Lock the file
+        let file = fs::OpenOptions::new().write(true).open(&src).unwrap();
+        use fs2::FileExt;
+        file.lock_exclusive().unwrap();
+
+        // Attempting to call lower-level vault.quarantine directly must still fail!
+        let err = vault.quarantine(&src, meta(&src)).unwrap_err();
+        assert!(matches!(err, VaultError::PreflightBlocked(_)));
+        assert!(src.is_file(), "file must remain untouched");
+        assert!(vault.items().is_empty(), "vault must have no entries");
+        drop(file);
     }
 
     #[test]

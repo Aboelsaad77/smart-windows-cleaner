@@ -347,6 +347,9 @@ fn hash_file(path: &Path) -> io::Result<(String, Vec<u8>)> {
 /// behavior on Windows (milestone M1).
 pub mod platform {
     use std::path::PathBuf;
+    pub use crate::elevation::{
+        check_elevation_requirement, ElevationRequirement, ElevationStatus, ElevationType,
+    };
 
     /// Roots used when `ScanConfig::roots` is empty: the user profile plus
     /// every drive letter whose root exists (no external dependency;
@@ -449,10 +452,16 @@ pub mod platform {
     }
 
     /// Whether the current process runs elevated.
-    /// M1: Windows token check. The app must only request elevation when a
-    /// protected location is actually selected (spec §1).
+    ///
+    /// M1 (spec §1): Windows token check. The app must only request elevation when a
+    /// protected location is actually selected.
     pub fn is_elevated() -> bool {
-        false
+        ElevationStatus::current().is_elevated
+    }
+
+    /// Full structured elevation status of the current process.
+    pub fn elevation_status() -> ElevationStatus {
+        ElevationStatus::current()
     }
 }
 

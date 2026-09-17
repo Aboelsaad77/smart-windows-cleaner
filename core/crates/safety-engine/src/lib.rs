@@ -202,7 +202,7 @@ pub fn enforce(
 }
 
 /// True if `path` equals `root` or lies underneath it (case-insensitive).
-fn under(path: &Path, root: &Path) -> bool {
+pub(crate) fn under(path: &Path, root: &Path) -> bool {
     let p = known_paths::norm(path);
     let normed = known_paths::norm(root);
     let r = normed.trim_end_matches('\\');
