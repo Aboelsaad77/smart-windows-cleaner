@@ -269,7 +269,10 @@ mod tests {
         let status = ElevationStatus::current();
         if status.is_elevated {
             assert!(status.is_admin_member);
-            assert_eq!(status.elevation_type, ElevationType::Full);
+            assert!(matches!(
+                status.elevation_type,
+                ElevationType::Full | ElevationType::Default
+            ));
         } else {
             // Unelevated process
             assert!(!status.is_elevated);

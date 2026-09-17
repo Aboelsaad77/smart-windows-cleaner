@@ -515,7 +515,7 @@ mod tests {
             .records
             .iter()
             .filter(|r| r.file_class == FileClass::RegularFile)
-            .map(|r| r.path.to_string_lossy().to_string())
+            .map(|r| r.path.to_string_lossy().replace('\\', "/"))
             .collect()
     }
 
