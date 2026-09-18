@@ -9,8 +9,8 @@ fn main() {
             "FileDescription",
             "Smart Windows Cleaner Core Native Engine",
         );
-        res.set("ProductVersion", "1.0.3");
-        res.set("FileVersion", "1.0.3.0");
+        res.set("ProductVersion", "1.0.4");
+        res.set("FileVersion", "1.0.4.0");
         res.set("OriginalFilename", "smart-cleaner-core.exe");
         res.set("LegalCopyright", "Copyright © 2026 Abdelrahman Aboelsaad");
         res.set_manifest(

@@ -18,6 +18,12 @@ extraResources:
       - smart-cleaner-core
       - smart-cleaner-core.exe
 
+extraFiles:
+  - from: ../installer/portable.dat
+    to: portable.dat
+  - from: ../installer/README-Portable.txt
+    to: README-Portable.txt
+
 # Feed metadata contract consumed by bootstrapper and electron-updater
 publish:
   - provider: generic

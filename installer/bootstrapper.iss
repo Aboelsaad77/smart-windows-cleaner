@@ -26,7 +26,7 @@
 #endif
 
 #define MyAppName "Smart Windows Cleaner"
-#define MyAppVersion "1.0.3"
+#define MyAppVersion "1.0.4"
 #define MyAppPublisher "Abdelrahman Aboelsaad"
 #define MyAppURL "https://github.com/Aboelsaad77/smart-windows-cleaner"
 #define MyAppExeName "SmartCleaner.exe"
@@ -848,7 +848,11 @@ begin
     RaiseException('Extraction finished but the application executable is missing at: ' +
       AddBackslash(Dest) + '{#MyAppExeName}');
   if not FileExists(AddBackslash(Dest) + 'portable.dat') then
-    RaiseException('Extraction finished but portable marker (portable.dat) is missing.');
+  begin
+    Log('portable.dat was not included in archive; generating it at ' + Dest);
+    SaveStringToFile(AddBackslash(Dest) + 'portable.dat',
+      'Smart Cleaner Portable Mode' + #13#10 + 'Do not delete this file.' + #13#10, False);
+  end;
   Log('Portable payload successfully extracted to ' + Dest);
   if MsgBox('Portable version ' + ChosenVersion + ' extracted to:' + #13#10 +
     Dest + #13#10#13#10 + 'Launch {#MyAppName} now?',

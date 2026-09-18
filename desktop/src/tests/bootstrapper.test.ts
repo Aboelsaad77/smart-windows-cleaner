@@ -40,7 +40,7 @@ describe('Bootstrapper & Distribution Architecture (PortSaid Parity)', () => {
         const expectedSha = createHash('sha512').update('test-payload-bytes').digest('base64');
         const stdout = execFileSync(
           process.execPath,
-          [scriptPath, '1.0.3', tmpZip, tmpYml],
+          [scriptPath, '1.0.4', tmpZip, tmpYml],
           { encoding: 'utf8' }
         );
 
@@ -48,7 +48,7 @@ describe('Bootstrapper & Distribution Architecture (PortSaid Parity)', () => {
         expect(fs.existsSync(tmpYml)).toBe(true);
 
         const yml = fs.readFileSync(tmpYml, 'utf8');
-        expect(yml).toContain('version: 1.0.3');
+        expect(yml).toContain('version: 1.0.4');
         expect(yml).toContain('url: test-portable-fixture.zip');
         expect(yml).toContain(`sha512: ${expectedSha}`);
         expect(yml).toContain('size: 18');
