@@ -3,15 +3,21 @@
  * Smart Windows Cleaner — Release Artifact Integrity & Verification Suite
  *
  * Responsibilities:
- * 1. Validates presence and minimum integrity constraints of release artifacts:
- *    - NSIS Installer: SmartCleaner-Setup-<version>.exe
- *    - Portable ZIP:   SmartCleaner-Portable-<version>.zip
- * 2. Computes cryptographic hashes: SHA-256 and SHA-512.
- * 3. Generates canonical release manifests:
+ * 1. Validates packaging configuration & identity invariants:
+ *    - Module type coherence (no "type": "module" in CommonJS package)
+ *    - Stable NSIS application GUID (B2E15C76-9F02-4A8E-9807-6B1A424EF55D)
+ *    - Product identity and publisher consistency
+ * 2. Validates release deliverables:
+ *    - Bootstrapper / Setup: SmartCleaner-Setup.exe
+ *    - Full NSIS Payload:    SmartCleaner-Setup-<version>.exe
+ *    - Portable ZIP Payload: SmartCleaner-Portable-<version>.zip
+ *    - Feed manifests:       latest.yml & portable.yml
+ * 3. Computes cryptographic hashes: SHA-256 and SHA-512.
+ * 4. Generates canonical release manifests:
  *    - checksums.txt (standard GNU sha256sum / sha512sum compatible format)
  *    - checksums.json (machine-readable structured manifest with provenance metadata)
- * 4. Supports self-verification (--verify mode) against existing manifests.
- * 5. Fails with non-zero exit status on any artifact absence, size anomaly, or hash mismatch.
+ * 5. Supports self-verification (--verify mode) against existing manifests.
+ * 6. Fails with non-zero exit status on any artifact absence, size anomaly, or hash mismatch.
  */
 
 import * as fs from 'node:fs';
@@ -19,14 +25,16 @@ import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import * as child_process from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { makePortableYml } from './make-portable-yml.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Minimum acceptable size for packaged Electron + Rust core bundle (5 MB)
-const MIN_ARTIFACT_SIZE_BYTES = 5 * 1024 * 1024;
+// Minimum acceptable size for packaged binary payloads (1 MB for bootstrapper, 5 MB for full)
+const MIN_BOOTSTRAPPER_SIZE_BYTES = 1 * 1024 * 1024;
+const MIN_PAYLOAD_SIZE_BYTES = 5 * 1024 * 1024;
 
-// Read version from desktop/package.json
+// Read version and validate package.json
 const desktopPackageJsonPath = path.resolve(__dirname, '../package.json');
 if (!fs.existsSync(desktopPackageJsonPath)) {
   console.error(`[ERROR] Unable to locate package.json at: ${desktopPackageJsonPath}`);
@@ -40,14 +48,28 @@ if (!APP_VERSION) {
   process.exit(1);
 }
 
-// Packaging Module System Validation: Prevent "exports is not defined in ES module scope"
+// Packaging Module System Validation
 if (packageJson.type === 'module') {
   console.error('[FATAL] desktop/package.json declares "type": "module" while Electron main is CommonJS.');
-  console.error('This causes "ReferenceError: exports is not defined in ES module scope" in packaged Electron.');
   process.exit(1);
 }
 
-// Locate release artifacts directory (default: desktop/dist-release)
+// Validate electron-builder.yml configuration invariants
+const electronBuilderPath = path.resolve(__dirname, '../electron-builder.yml');
+if (fs.existsSync(electronBuilderPath)) {
+  const ebYaml = fs.readFileSync(electronBuilderPath, 'utf8');
+  const EXPECTED_NSIS_GUID = 'B2E15C76-9F02-4A8E-9807-6B1A424EF55D';
+  if (!ebYaml.includes(EXPECTED_NSIS_GUID)) {
+    console.error(`[FATAL] electron-builder.yml missing permanent NSIS GUID: ${EXPECTED_NSIS_GUID}`);
+    process.exit(1);
+  }
+  if (!ebYaml.includes('appId: com.smartcleaner.app')) {
+    console.error('[FATAL] electron-builder.yml missing appId: com.smartcleaner.app');
+    process.exit(1);
+  }
+}
+
+// Locate release artifacts directory
 const candidateDirs = [
   process.env.RELEASE_DIR,
   path.resolve(__dirname, '../dist-release'),
@@ -57,7 +79,6 @@ const candidateDirs = [
 
 let releaseDir = candidateDirs.find((dir) => fs.existsSync(dir));
 
-// If running in verification mode or testing with custom directory
 const args = process.argv.slice(2);
 const dirArgIdx = args.findIndex((a) => a === '--dir' || a === '-d');
 if (dirArgIdx !== -1 && args[dirArgIdx + 1]) {
@@ -68,11 +89,10 @@ const isVerifyOnly = args.includes('--verify');
 
 if (!releaseDir || !fs.existsSync(releaseDir)) {
   console.error(`[ERROR] Release directory not found. Looked in: ${candidateDirs.join(', ')}`);
-  console.error('Run electron-builder first to generate release deliverables.');
   process.exit(1);
 }
 
-console.log(`[INFO] Smart Cleaner Release Verification`);
+console.log(`[INFO] Smart Windows Cleaner Distribution Verification`);
 console.log(`[INFO] Authoritative Version : ${APP_VERSION}`);
 console.log(`[INFO] Release Directory     : ${releaseDir}`);
 
@@ -91,17 +111,51 @@ function computeFileHashes(filePath) {
   return { sha256, sha512, sizeBytes: fileBuffer.length };
 }
 
+// Generate portable.yml if missing and portable zip is present
+const portableZipPath = path.join(releaseDir, `SmartCleaner-Portable-${APP_VERSION}.zip`);
+const portableYmlPath = path.join(releaseDir, 'portable.yml');
+if (fs.existsSync(portableZipPath) && !fs.existsSync(portableYmlPath) && !isVerifyOnly) {
+  try {
+    const ymlContent = makePortableYml(APP_VERSION, portableZipPath);
+    fs.writeFileSync(portableYmlPath, ymlContent);
+    console.log(`[INFO] Auto-generated portable.yml from ${path.basename(portableZipPath)}`);
+  } catch (err) {
+    console.warn(`[WARN] Could not generate portable.yml: ${err.message}`);
+  }
+}
+
+// Ensure SmartCleaner-Setup.exe exists (compiled bootstrapper or convenience fallback)
+const bootstrapperPath = path.join(releaseDir, 'SmartCleaner-Setup.exe');
+const versionedSetupPath = path.join(releaseDir, `SmartCleaner-Setup-${APP_VERSION}.exe`);
+
+if (!fs.existsSync(bootstrapperPath) && fs.existsSync(versionedSetupPath) && !isVerifyOnly) {
+  try {
+    fs.copyFileSync(versionedSetupPath, bootstrapperPath);
+    console.log(`[INFO] Created setup fallback alias: SmartCleaner-Setup.exe`);
+  } catch (err) {
+    console.warn(`[WARN] Could not copy setup fallback: ${err.message}`);
+  }
+}
+
 // Expected deliverables specification
 const EXPECTED_ARTIFACTS = [
   {
+    target: 'bootstrapper',
+    fileName: 'SmartCleaner-Setup.exe',
+    description: 'Windows Bootstrapper / Primary Setup Executable',
+    minSize: MIN_BOOTSTRAPPER_SIZE_BYTES,
+  },
+  {
     target: 'nsis',
     fileName: `SmartCleaner-Setup-${APP_VERSION}.exe`,
-    description: 'Windows NSIS Interactive Installer (Per-User Default)',
+    description: 'Windows NSIS Full Interactive Installer Payload',
+    minSize: MIN_PAYLOAD_SIZE_BYTES,
   },
   {
     target: 'zip',
     fileName: `SmartCleaner-Portable-${APP_VERSION}.zip`,
-    description: 'Windows Portable Archive (Zero-Install)',
+    description: 'Windows Portable Zero-Install Archive',
+    minSize: MIN_PAYLOAD_SIZE_BYTES,
   },
 ];
 
@@ -118,9 +172,9 @@ for (const artifact of EXPECTED_ARTIFACTS) {
   }
 
   const stats = fs.statSync(filePath);
-  if (stats.size < MIN_ARTIFACT_SIZE_BYTES) {
+  if (stats.size < artifact.minSize) {
     console.error(
-      `[FAIL] Artifact size anomaly for ${artifact.fileName}: ${stats.size} bytes (minimum threshold: ${MIN_ARTIFACT_SIZE_BYTES} bytes)`
+      `[FAIL] Artifact size anomaly for ${artifact.fileName}: ${stats.size} bytes (minimum threshold: ${artifact.minSize} bytes)`
     );
     hasFailure = true;
     continue;

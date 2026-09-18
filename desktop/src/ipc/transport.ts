@@ -331,7 +331,7 @@ export class MockTransport implements IpcTransport {
       status: 'ok',
       data: {
         state: 'idle',
-        current_version: '1.0.0',
+        current_version: '1.0.1',
         channel: 'stable',
         is_portable: false,
         available_update: null,
@@ -348,7 +348,7 @@ export class MockTransport implements IpcTransport {
       status: 'ok',
       data: {
         state: 'available',
-        current_version: '1.0.0',
+        current_version: '1.0.1',
         channel: 'stable',
         is_portable: false,
         available_update: {
@@ -377,7 +377,7 @@ export class MockTransport implements IpcTransport {
       status: 'ok',
       data: {
         state: 'downloaded',
-        current_version: '1.0.0',
+        current_version: '1.0.1',
         channel: 'stable',
         is_portable: false,
         available_update: {
@@ -427,7 +427,7 @@ export class MockTransport implements IpcTransport {
         status: 'ok',
         data: {
           state: 'idle',
-          current_version: '1.0.0',
+          current_version: '1.0.1',
           channel: payload?.channel || 'stable',
           is_portable: false,
           available_update: null,
@@ -445,7 +445,7 @@ export class MockTransport implements IpcTransport {
       status: 'ok',
       data: {
         state: 'available',
-        current_version: '1.0.0',
+        current_version: '1.0.1',
         channel: 'stable',
         is_portable: false,
         available_update: null,

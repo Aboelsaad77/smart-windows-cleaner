@@ -322,7 +322,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "sc-ai-gateway"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "sc-file-models",
  "serde",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "sc-cli"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "fs2",
  "rusqlite",
@@ -342,11 +342,12 @@ dependencies = [
  "sc-scanner",
  "sha2",
  "tempfile",
+ "winres",
 ]
 
 [[package]]
 name = "sc-db"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "rusqlite",
  "sc-file-models",
@@ -356,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "sc-file-models"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -364,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "sc-local-rules"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "sc-file-models",
  "sc-risk-engine",
@@ -375,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "sc-quarantine"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "fs2",
  "libc",
@@ -391,7 +392,7 @@ dependencies = [
 
 [[package]]
 name = "sc-risk-engine"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "sc-file-models",
  "serde",
@@ -399,7 +400,7 @@ dependencies = [
 
 [[package]]
 name = "sc-safety-engine"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "fs2",
  "sc-file-models",
@@ -409,7 +410,7 @@ dependencies = [
 
 [[package]]
 name = "sc-scanner"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "ahash",
  "fs2",
@@ -527,6 +528,15 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "toml"
+version = "0.5.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4f7f0dd8d50a853a531c426359045b1998f04219d88799810762cd4ad314234"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -728,6 +738,15 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
+
+[[package]]
+name = "winres"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b68db261ef59e9e52806f688020631e987592bd83619edccda9c47d42cde4f6c"
+dependencies = [
+ "toml",
+]
 
 [[package]]
 name = "wit-bindgen"

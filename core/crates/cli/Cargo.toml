@@ -30,3 +30,6 @@ fs2 = { workspace = true }
 sha2 = { workspace = true }
 rusqlite = { workspace = true }
 tempfile = "3"
+
+[target."cfg(windows)".build-dependencies]
+winres = "0.1.12"

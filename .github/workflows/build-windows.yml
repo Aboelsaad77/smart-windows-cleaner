@@ -62,7 +62,7 @@ jobs:
         run: cargo build --release --bin smart-cleaner-core
         working-directory: core
 
-      - name: Verify Built Rust Executable
+      - name: Verify Built Rust Executable & PE Metadata
         shell: pwsh
         run: |
           $coreExe = "core\target\release\smart-cleaner-core.exe"
@@ -71,6 +71,20 @@ jobs:
             exit 1
           }
           Write-Host "Found Rust Core binary: $coreExe ($( (Get-Item $coreExe).Length ) bytes)"
+          $versionInfo = (Get-Item $coreExe).VersionInfo
+          Write-Host "PE ProductVersion : $($versionInfo.ProductVersion)"
+          Write-Host "PE FileVersion    : $($versionInfo.FileVersion)"
+          Write-Host "PE CompanyName    : $($versionInfo.CompanyName)"
+          Write-Host "PE ProductName    : $($versionInfo.ProductName)"
+          Write-Host "PE Description    : $($versionInfo.FileDescription)"
+          if ($versionInfo.CompanyName -ne "Abdelrahman Aboelsaad") {
+            Write-Error "CompanyName does not match expected value: $($versionInfo.CompanyName)"
+            exit 1
+          }
+          if ($versionInfo.ProductName -ne "Smart Windows Cleaner") {
+            Write-Error "ProductName does not match expected value: $($versionInfo.ProductName)"
+            exit 1
+          }
 
       - name: Install Frontend Dependencies
         run: npm ci
@@ -92,6 +106,28 @@ jobs:
         run: npm run package
         working-directory: desktop
 
+      - name: Generate portable.yml Manifest
+        shell: pwsh
+        run: |
+          $v = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
+          $zip = "desktop/dist-release/SmartCleaner-Portable-$v.zip"
+          $out = "desktop/dist-release/portable.yml"
+          if (Test-Path $zip) {
+            node desktop/scripts/make-portable-yml.mjs $v $zip $out
+          }
+
+      - name: Compile Inno Setup Bootstrapper (ISCC)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup ISCC.exe not found on runner" }
+          & $iscc installer\bootstrapper.iss
+          if (-not (Test-Path desktop\dist-release\SmartCleaner-Setup.exe)) {
+            throw "Bootstrapper binary desktop\dist-release\SmartCleaner-Setup.exe not produced"
+          }
+          Write-Host "Successfully compiled SmartCleaner-Setup.exe ($( (Get-Item desktop\dist-release\SmartCleaner-Setup.exe).Length ) bytes)"
+
       - name: Verify Release Artifacts & Generate Checksums
         run: npm run verify-release
         working-directory: desktop
@@ -102,8 +138,11 @@ jobs:
         with:
           name: windows-release-artifacts
           path: |
+            desktop/dist-release/SmartCleaner-Setup.exe
             desktop/dist-release/SmartCleaner-Setup-*.exe
             desktop/dist-release/SmartCleaner-Portable-*.zip
+            desktop/dist-release/latest.yml
+            desktop/dist-release/portable.yml
             desktop/dist-release/checksums.txt
             desktop/dist-release/checksums.json
           if-no-files-found: warn
@@ -113,8 +152,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            desktop/dist-release/SmartCleaner-Setup.exe
             desktop/dist-release/SmartCleaner-Setup-*.exe
             desktop/dist-release/SmartCleaner-Portable-*.zip
+            desktop/dist-release/latest.yml
+            desktop/dist-release/portable.yml
             desktop/dist-release/checksums.txt
             desktop/dist-release/checksums.json
           token: ${{ secrets.GITHUB_TOKEN }}

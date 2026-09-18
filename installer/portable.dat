@@ -1,0 +1,5 @@
+Smart Windows Cleaner — portable mode marker.
+Do not delete this file: its presence next to the executable tells the app
+to keep application data beside the executable, and to never download or
+install background updates automatically.
+(Only the file's existence is checked; this text is informational.)

@@ -1,0 +1,17 @@
+Smart Windows Cleaner End-User License Agreement
+
+Copyright © 2026 Abdelrahman Aboelsaad. All rights reserved.
+
+1. Grant of License
+Subject to the terms of this Agreement, the author grants you a personal, non-exclusive, non-transferable license to install and use Smart Windows Cleaner for lawful system maintenance and storage reclamation.
+
+2. Safety & Explainability Guarantees
+Smart Windows Cleaner is engineered with fail-safe principles:
+- Reversible quarantine-only architecture: Files are moved to an encrypted, isolated vault and can be fully restored. Direct deletion is disabled.
+- Pre-flight safety engine: Critical system files, operating system drivers, active running processes, WinSxS component store, and user exclusions are permanently protected.
+
+3. Disclaimer of Warranty
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY.
+
+4. Distribution
+Redistribution of unmodified release packages is permitted provided that all copyright notices and integrity checksums remain intact.

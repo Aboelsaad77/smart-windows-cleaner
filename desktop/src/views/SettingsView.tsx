@@ -416,7 +416,7 @@ export const SettingsView: React.FC = () => {
                 Installed Version
               </div>
               <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                v1.0.0 (Core Native Release)
+                v1.0.1 (Core Native Release)
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

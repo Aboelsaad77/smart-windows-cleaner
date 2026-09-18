@@ -183,7 +183,7 @@ describe('Stage 2 — Secure Auto-Updater UI & User Confirmation Integration', (
 
     await waitFor(() => {
       expect(screen.getByText(/Updates & Releases \(Ed25519 Authenticity\)/i)).toBeInTheDocument();
-      expect(screen.getByText(/v1.0.0 \(Core Native Release\)/i)).toBeInTheDocument();
+      expect(screen.getByText(/v1\.0\.\d+ \(Core Native Release\)/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /check for updates/i })).toBeInTheDocument();
     });
 

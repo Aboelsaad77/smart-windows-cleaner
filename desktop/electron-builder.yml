@@ -1,5 +1,5 @@
 appId: com.smartcleaner.app
-productName: SmartCleaner
+productName: Smart Windows Cleaner
 copyright: Copyright © 2026 Abdelrahman Aboelsaad
 
 directories:
@@ -27,16 +27,19 @@ win:
       arch:
         - x64
   executableName: SmartCleaner
+  publisherName: Abdelrahman Aboelsaad
+  legalTrademarks: Smart Windows Cleaner
   artifactName: SmartCleaner-Portable-${version}.${ext}
 
 nsis:
+  guid: B2E15C76-9F02-4A8E-9807-6B1A424EF55D
   artifactName: SmartCleaner-Setup-${version}.${ext}
   oneClick: false
   allowToChangeInstallationDirectory: true
   perMachine: false
   deleteAppDataOnUninstall: false
-  shortcutName: Smart Cleaner
+  shortcutName: Smart Windows Cleaner
   createDesktopShortcut: always
   createStartMenuShortcut: true
-  uninstallDisplayName: Smart Cleaner
+  uninstallDisplayName: Smart Windows Cleaner
   runAfterFinish: true
