@@ -40,6 +40,13 @@ if (!APP_VERSION) {
   process.exit(1);
 }
 
+// Packaging Module System Validation: Prevent "exports is not defined in ES module scope"
+if (packageJson.type === 'module') {
+  console.error('[FATAL] desktop/package.json declares "type": "module" while Electron main is CommonJS.');
+  console.error('This causes "ReferenceError: exports is not defined in ES module scope" in packaged Electron.');
+  process.exit(1);
+}
+
 // Locate release artifacts directory (default: desktop/dist-release)
 const candidateDirs = [
   process.env.RELEASE_DIR,

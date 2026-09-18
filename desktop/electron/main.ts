@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs';
 import * as child_process from 'child_process';
 import * as readline from 'readline';
 import { IpcRequest, IpcResponse, IpcEvent } from '../src/types/ipc';
@@ -288,7 +289,9 @@ function createWindow() {
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    const prodPath = path.join(__dirname, '../../dist/index.html');
+    const fallbackPath = path.join(__dirname, '../dist/index.html');
+    mainWindow.loadFile(fs.existsSync(prodPath) ? prodPath : fallbackPath);
   }
 
   mainWindow.on('closed', () => {
