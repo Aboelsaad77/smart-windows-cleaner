@@ -26,7 +26,7 @@
 #endif
 
 #define MyAppName "Smart Windows Cleaner"
-#define MyAppVersion "1.0.4"
+#define MyAppVersion "1.0.5"
 #define MyAppPublisher "Abdelrahman Aboelsaad"
 #define MyAppURL "https://github.com/Aboelsaad77/smart-windows-cleaner"
 #define MyAppExeName "SmartCleaner.exe"

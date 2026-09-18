@@ -1,14 +1,53 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol, net } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as child_process from 'child_process';
 import * as readline from 'readline';
+import { pathToFileURL } from 'url';
 import { IpcRequest, IpcResponse, IpcEvent } from '../src/types/ipc';
 import { SecureAutoUpdater } from './updater';
 import { UpdateChannel } from '../src/types/updater';
 import { LicensingEngine } from './licensing';
 
+// Hardware acceleration can fail in some virtual environments or headless sessions
+app.disableHardwareAcceleration();
+
+// Register privileged custom scheme BEFORE app.whenReady() to avoid CORS/origin issues
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'app',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      allowServiceWorkers: true,
+    },
+  },
+]);
+
 let mainWindow: BrowserWindow | null = null;
+const earlyLogBuffer: string[] = [];
+
+// Persistent file-based diagnostic logging for production runs
+function logToFile(msg: string) {
+  const line = `[${new Date().toISOString()}] ${msg}\n`;
+  if (!app.isReady()) {
+    earlyLogBuffer.push(line);
+    return;
+  }
+  try {
+    const logDir = app.getPath('userData');
+    fs.mkdirSync(logDir, { recursive: true });
+    const logFile = path.join(logDir, 'smart-cleaner.log');
+    if (earlyLogBuffer.length > 0) {
+      fs.appendFileSync(logFile, earlyLogBuffer.splice(0).join(''), 'utf8');
+    }
+    fs.appendFileSync(logFile, line, 'utf8');
+  } catch {
+    // Fail silently if unable to write log
+  }
+}
 
 // Whitelist of valid IPC actions from renderer (Security Hardening M4.6 & Stage 2)
 const ALLOWED_IPC_ACTIONS = new Set<string>([
@@ -54,7 +93,7 @@ let isScanActive = false;
 let activeQuarantineOps = 0;
 
 const autoUpdater = new SecureAutoUpdater({
-  currentVersion: '1.0.2',
+  currentVersion: '1.0.5',
   defaultChannel: 'stable',
   eventBroadcaster: (event) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -104,7 +143,9 @@ class RustCoreBridge {
     if (this.isShuttingDown) return;
 
     const corePath = this.resolveCoreBinaryPath();
-    console.log(`[Electron Main] Spawning Rust Core binary: ${corePath}`);
+    const startMsg = `[Electron Main] Spawning Rust Core binary: ${corePath}`;
+    console.log(startMsg);
+    logToFile(startMsg);
 
     try {
       this.child = child_process.spawn(corePath, ['--ipc-stdio'], {
@@ -135,19 +176,26 @@ class RustCoreBridge {
 
         rlErr.on('line', (errLine: string) => {
           console.error(`[Rust Core stderr] ${errLine}`);
+          logToFile(`[Rust Core stderr] ${errLine}`);
         });
       }
 
       this.child.on('exit', (code: number | null, signal: string | null) => {
-        console.warn(`[Electron Main] Rust Core exited with code: ${code}, signal: ${signal}`);
+        const exitMsg = `[Electron Main] Rust Core exited with code: ${code}, signal: ${signal}`;
+        console.warn(exitMsg);
+        logToFile(exitMsg);
         this.handleProcessExit();
       });
 
       this.child.on('error', (err: Error) => {
-        console.error('[Electron Main] Rust Core process spawn error:', err);
+        const errMsg = `[Electron Main] Rust Core process spawn error: ${err.message}`;
+        console.error(errMsg);
+        logToFile(errMsg);
       });
     } catch (err: unknown) {
-      console.error('[Electron Main] Failed to spawn Rust Core process:', err);
+      const errMsg = `[Electron Main] Failed to spawn Rust Core process: ${err instanceof Error ? err.message : String(err)}`;
+      console.error(errMsg);
+      logToFile(errMsg);
     }
   }
 
@@ -282,40 +330,69 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
     },
   });
 
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
-    console.error(`[RENDERER_FAIL_LOAD] Failed to load ${validatedURL}: ${errorDescription} (${errorCode})`);
+    const err = `[RENDERER_FAIL_LOAD] Failed to load ${validatedURL}: ${errorDescription} (${errorCode})`;
+    console.error(err);
+    logToFile(err);
   });
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error(`[RENDERER_GONE] Render process gone: ${details.reason} (exitCode: ${details.exitCode})`);
+    const err = `[RENDERER_GONE] Render process gone: ${details.reason} (exitCode: ${details.exitCode})`;
+    console.error(err);
+    logToFile(err);
   });
 
   mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    const msg = `[RENDERER_CONSOLE] [Level ${level}] ${message} (${sourceId}:${line})`;
     if (level >= 2) {
-      console.error(`[RENDERER_CONSOLE] [Level ${level}] ${message} (${sourceId}:${line})`);
+      console.error(msg);
+    }
+    logToFile(msg);
+  });
+
+  // Diagnostic hotkey: F12 or Ctrl+Shift+I toggles DevTools
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i')) {
+      mainWindow?.webContents.toggleDevTools();
     }
   });
+
+  // Automatically open DevTools if requested via CLI flag or env var
+  if (
+    process.argv.includes('--devtools') ||
+    process.env.SMART_CLEANER_DEVTOOLS === '1' ||
+    process.env.ELECTRON_DEVTOOLS === '1'
+  ) {
+    mainWindow.webContents.openDevTools();
+  }
 
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    const appRoot = app.getAppPath();
-    const candidatePaths = [
-      path.join(appRoot, 'dist/index.html'),
-      path.join(__dirname, '../../dist/index.html'),
-      path.join(__dirname, '../dist/index.html'),
-    ];
-    const targetPath = candidatePaths.find((p) => fs.existsSync(p));
-    if (targetPath) {
-      mainWindow.loadFile(targetPath);
-    } else {
-      console.error('[FATAL] Could not locate dist/index.html in candidate paths:', candidatePaths);
-      mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
-    }
+    // Primary: Custom app:// scheme prevents CORS origin:null blocks on ES modules and path issues
+    mainWindow.loadURL('app://smartcleaner/index.html').catch((err) => {
+      const msg = `[LOAD_URL_FAIL] app:// load failed: ${err}; falling back to loadFile`;
+      console.warn(msg);
+      logToFile(msg);
+
+      const appRoot = app.getAppPath();
+      const candidatePaths = [
+        path.join(appRoot, 'dist/index.html'),
+        path.join(__dirname, '../../dist/index.html'),
+        path.join(__dirname, '../dist/index.html'),
+      ];
+      const targetPath = candidatePaths.find((p) => fs.existsSync(p));
+      if (targetPath) {
+        mainWindow?.loadFile(targetPath);
+      } else {
+        console.error('[FATAL] Could not locate dist/index.html in candidate paths:', candidatePaths);
+        mainWindow?.loadFile(path.join(__dirname, '../dist/index.html'));
+      }
+    });
   }
 
   mainWindow.on('closed', () => {
@@ -462,6 +539,46 @@ ipcMain.handle('smart-cleaner:ipc', async (_event, request: IpcRequest): Promise
 });
 
 app.whenReady().then(() => {
+  // Register custom 'app://' protocol handler to serve local renderer assets
+  protocol.handle('app', (request) => {
+    try {
+      const parsedUrl = new URL(request.url);
+      let pathname = decodeURIComponent(parsedUrl.pathname);
+      if (pathname.startsWith('/')) {
+        pathname = pathname.slice(1);
+      }
+      if (!pathname || pathname === '/') {
+        pathname = 'index.html';
+      }
+
+      const appRoot = app.getAppPath();
+      const candidatePaths = [
+        path.join(appRoot, 'dist', pathname),
+        path.join(__dirname, '../../dist', pathname),
+        path.join(__dirname, '../dist', pathname),
+      ];
+
+      const resolvedPath = candidatePaths.find((p) => fs.existsSync(p));
+      if (resolvedPath) {
+        return net.fetch(pathToFileURL(resolvedPath).toString());
+      }
+
+      // If specific asset not found, check if index.html exists for SPA fallback
+      const fallbackIndex = candidatePaths
+        .map((p) => path.join(path.dirname(p), 'index.html'))
+        .find((p) => fs.existsSync(p));
+      if (fallbackIndex) {
+        return net.fetch(pathToFileURL(fallbackIndex).toString());
+      }
+
+      logToFile(`[PROTOCOL_404] Resource not found: ${request.url}`);
+      return new Response('Resource Not Found', { status: 404 });
+    } catch (err) {
+      logToFile(`[PROTOCOL_ERROR] Error handling ${request.url}: ${err}`);
+      return new Response('Internal Protocol Error', { status: 500 });
+    }
+  });
+
   coreBridge.start();
   createWindow();
 
