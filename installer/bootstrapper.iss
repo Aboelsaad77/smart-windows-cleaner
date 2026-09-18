@@ -1,7 +1,7 @@
 ; ---------------------------------------------------------------------------
 ;  Smart Windows Cleaner — Version-Agnostic Bootstrapper Setup
 ;
-;  Small (~3-5 MB class) downloader/installer. Reads the production release
+;  Small (~2-3 MB class) downloader/installer. Reads the production release
 ;  manifests (latest.yml + portable.yml), lets the user choose between Full
 ;  Installation and Portable Version, downloads exactly one payload,
 ;  cryptographically verifies it (SHA-512 from manifest), and launches or
@@ -26,7 +26,7 @@
 #endif
 
 #define MyAppName "Smart Windows Cleaner"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.2"
 #define MyAppPublisher "Abdelrahman Aboelsaad"
 #define MyAppURL "https://github.com/Aboelsaad77/smart-windows-cleaner"
 #define MyAppExeName "SmartCleaner.exe"
@@ -133,6 +133,7 @@ var
   ManifestsFetched: Boolean;
   OnlineMode: Boolean;
   FullOK, PortOK: Boolean;
+  LatestFetchErr, PortFetchErr: String;
   FeedVersionFull, FeedFileFull, FeedShaFull: String;
   FeedVersionPort, FeedFilePort, FeedShaPort: String;
   CacheVersion, CacheKind, CacheManifestName, CachePayloadName: String;
@@ -331,27 +332,47 @@ var
 begin
   FullOK := False; PortOK := False;
   OnlineMode := False;
+  LatestFetchErr := ''; PortFetchErr := '';
   Tmp := ExpandConstant('{tmp}');
+
   try
+    Log('Fetching latest manifest from: ' + FeedBase() + LatestManifest);
     DownloadTemporaryFile(FeedBase() + LatestManifest, LatestManifest, '', nil);
     if ParseManifest(Tmp + '\' + LatestManifest, FV, FF, FS) then
     begin
       FullOK := True; OnlineMode := True;
       FeedVersionFull := FV; FeedFileFull := FF; FeedShaFull := FS;
+      Log('latest.yml OK: version=' + FV + ', payload=' + FF);
+    end
+    else
+    begin
+      LatestFetchErr := 'Manifest parsing failed (invalid schema or path).';
+      Log('latest.yml parse error');
     end;
   except
-    Log('latest.yml fetch failed: ' + GetExceptionMessage);
+    LatestFetchErr := GetExceptionMessage;
+    Log('latest.yml fetch failed: ' + LatestFetchErr);
   end;
+
   try
+    Log('Fetching portable manifest from: ' + FeedBase() + PortableManifest);
     DownloadTemporaryFile(FeedBase() + PortableManifest, PortableManifest, '', nil);
     if ParseManifest(Tmp + '\' + PortableManifest, PV, PF, PS) then
     begin
       PortOK := True; OnlineMode := True;
       FeedVersionPort := PV; FeedFilePort := PF; FeedShaPort := PS;
+      Log('portable.yml OK: version=' + PV + ', payload=' + PF);
+    end
+    else
+    begin
+      PortFetchErr := 'Manifest parsing failed (invalid schema or path).';
+      Log('portable.yml parse error');
     end;
   except
-    Log('portable.yml fetch failed: ' + GetExceptionMessage);
+    PortFetchErr := GetExceptionMessage;
+    Log('portable.yml fetch failed: ' + PortFetchErr);
   end;
+
   if not OnlineMode then
     ScanCache();
 end;
@@ -407,9 +428,18 @@ begin
     end
     else
     begin
-      MsgBox('That option is not available from the release feed right now. ' +
-        'Please choose the other option or try again later.',
-        mbError, MB_OK);
+      if (ChosenKind = 'full') then
+        MsgBox('Full Installation is not available from the release feed.' + #13#10#13#10 +
+          'Target URL: ' + FeedBase() + LatestManifest + #13#10 +
+          'Diagnostic: ' + LatestFetchErr + #13#10#13#10 +
+          'Please choose Portable Version or verify your internet connection.',
+          mbError, MB_OK)
+      else
+        MsgBox('Portable Version is not available from the release feed.' + #13#10#13#10 +
+          'Target URL: ' + FeedBase() + PortableManifest + #13#10 +
+          'Diagnostic: ' + PortFetchErr + #13#10#13#10 +
+          'Please choose Full Installation or verify your internet connection.',
+          mbError, MB_OK);
       Exit;
     end;
   end
@@ -417,7 +447,13 @@ begin
   begin
     if (CacheVersion = '') or (CacheKind <> ChosenKind) then
     begin
-      MsgBox(CustomMessage('ModeNoSource'), mbError, MB_OK);
+      MsgBox('Could not reach the release feed and no verified offline cache was found.' + #13#10#13#10 +
+        'Network Diagnostics:' + #13#10 +
+        '• Feed Base: ' + FeedBase() + #13#10 +
+        '• Full (latest.yml): ' + LatestFetchErr + #13#10 +
+        '• Portable (portable.yml): ' + PortFetchErr + #13#10#13#10 +
+        'Please check your internet connection, proxy, or firewall, then restart Setup.',
+        mbError, MB_OK);
       Exit;
     end;
     ChosenFromCache := True;
@@ -505,29 +541,32 @@ begin
     '-Algorithm SHA512 -LiteralPath ''' + PayloadPath + ''').Hash | ' +
     'Out-File -LiteralPath ''' + HashFile + ''' -NoNewline -Encoding ascii"';
   if not Exec(PS, Args, '', SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
-    RaiseException('Integrity check could not run (PowerShell failed). Aborting.');
+    RaiseException('Integrity check could not run (PowerShell failed with exit code ' + IntToStr(Code) + '). Aborting.');
   if not FileExists(HashFile) then
-    RaiseException('Integrity check produced no result. Aborting.');
+    RaiseException('Integrity check produced no result at ' + HashFile + '. Aborting.');
   Lines := TStringList.Create;
   try
     Lines.LoadFromFile(HashFile);
     if Lines.Count = 0 then
-      RaiseException('Integrity check produced no result. Aborting.');
+      RaiseException('Integrity check produced empty output. Aborting.');
     Got := Uppercase(Trim(Lines[0]));
   finally
     Lines.Free;
   end;
   DeleteFile(HashFile);
   Want := Base64ToHex(ChosenSha);
+  Log('Payload SHA-512 check: Computed=' + Got + ', Expected=' + Want);
   if (Got = '') or (Got <> Want) then
   begin
     DeleteFile(PayloadPath);
     RaiseException(
-      'INTEGRITY FAILURE: the package does not match its signed manifest ' +
-      '(SHA-512 mismatch). The file was deleted and nothing was installed. ' +
-      'Please retry — if it persists, the feed or network is compromised.');
+      'INTEGRITY FAILURE: the downloaded package does not match its manifest SHA-512.' + #13#10#13#10 +
+      'Expected: ' + Want + #13#10 +
+      'Computed: ' + Got + #13#10#13#10 +
+      'The corrupted file was deleted and nothing was installed. ' +
+      'Please retry — if this persists, the network connection or feed may be compromised.');
   end;
-  Log('SHA-512 verified for ' + ChosenFile);
+  Log('SHA-512 verified successfully for ' + ChosenFile);
 end;
 
 procedure WriteCache();
@@ -567,8 +606,9 @@ var
   Code: Integer;
   InstalledExe: String;
 begin
+  Log('Executing Full NSIS installer: ' + PayloadPath);
   if not Exec(PayloadPath, '', '', SW_SHOW, ewWaitUntilTerminated, Code) then
-    RaiseException('Could not start the Full installer.');
+    RaiseException('Could not start the Full installer: ' + PayloadPath);
   if Code <> 0 then
     RaiseException('The Full installer did not complete ' +
       '(exit code ' + IntToStr(Code) + '). Nothing was changed by Setup.');
@@ -594,6 +634,7 @@ var
   Code: Integer;
 begin
   Dest := DirPage.Values[0];
+  Log('Extracting Portable ZIP to: ' + Dest);
   ForceDirectories(Dest);
   ExtractionPage.Clear;
   ExtractionPage.Add(PayloadPath, Dest, True);
@@ -607,9 +648,11 @@ begin
   if ExtractionPage.AbortedByUser then
     RaiseException('Extraction cancelled. The folder may be incomplete — delete it and retry.');
   if not FileExists(AddBackslash(Dest) + '{#MyAppExeName}') then
-    RaiseException('Extraction finished but the app is missing. Aborting.');
+    RaiseException('Extraction finished but the application executable is missing at: ' +
+      AddBackslash(Dest) + '{#MyAppExeName}');
   if not FileExists(AddBackslash(Dest) + 'portable.dat') then
-    RaiseException('Extraction finished but the portable marker is missing. Aborting.');
+    RaiseException('Extraction finished but portable marker (portable.dat) is missing.');
+  Log('Portable payload successfully extracted to ' + Dest);
   if MsgBox('Portable version ' + ChosenVersion + ' extracted to:' + #13#10 +
     Dest + #13#10#13#10 + 'Launch {#MyAppName} now?',
     mbConfirmation, MB_YESNO or MB_DEFBUTTON1) = IDYES then
@@ -619,22 +662,32 @@ begin
 end;
 
 procedure DoDownloadPayload();
+var
+  DlUrl: String;
 begin
+  DlUrl := FeedBase() + ChosenFile;
   PayloadPath := ExpandConstant('{tmp}\' + ChosenFile);
   DeleteFile(PayloadPath);
+  Log('Downloading payload: ' + DlUrl + ' -> ' + PayloadPath);
   DownloadPage.Clear;
-  DownloadPage.Add(FeedBase() + ChosenFile, ChosenFile, '');
+  DownloadPage.Add(DlUrl, ChosenFile, '');
   DownloadPage.ShowBaseNameInsteadOfUrl := True;
   DownloadPage.Show;
   try
-    DownloadPage.Download;
+    try
+      DownloadPage.Download;
+    except
+      RaiseException('Payload download failed from ' + DlUrl + #13#10#13#10 +
+        'Error: ' + GetExceptionMessage());
+    end;
   finally
     DownloadPage.Hide;
   end;
   if DownloadPage.AbortedByUser then
-    RaiseException('Download cancelled.');
+    RaiseException('Download was cancelled by user.');
   if not FileExists(PayloadPath) then
-    RaiseException('Download finished but the file is missing. Aborting.');
+    RaiseException('Download finished but payload file is missing at: ' + PayloadPath);
+  Log('Payload downloaded successfully: ' + PayloadPath);
 end;
 
 procedure FailClosed(const Msg: String);

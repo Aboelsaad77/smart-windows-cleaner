@@ -54,7 +54,7 @@ let isScanActive = false;
 let activeQuarantineOps = 0;
 
 const autoUpdater = new SecureAutoUpdater({
-  currentVersion: '1.0.1',
+  currentVersion: '1.0.2',
   defaultChannel: 'stable',
   eventBroadcaster: (event) => {
     if (mainWindow && !mainWindow.isDestroyed()) {

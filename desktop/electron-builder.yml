@@ -18,6 +18,11 @@ extraResources:
       - smart-cleaner-core
       - smart-cleaner-core.exe
 
+# Feed metadata contract consumed by bootstrapper and electron-updater
+publish:
+  - provider: generic
+    url: https://github.com/Aboelsaad77/smart-windows-cleaner/releases/latest/download/
+
 win:
   target:
     - target: nsis

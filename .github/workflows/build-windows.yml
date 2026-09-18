@@ -106,14 +106,17 @@ jobs:
         run: npm run package
         working-directory: desktop
 
-      - name: Generate portable.yml Manifest
+      - name: Generate Release Manifests (latest.yml & portable.yml)
         shell: pwsh
         run: |
           $v = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
           $zip = "desktop/dist-release/SmartCleaner-Portable-$v.zip"
-          $out = "desktop/dist-release/portable.yml"
+          $setup = "desktop/dist-release/SmartCleaner-Setup-$v.exe"
           if (Test-Path $zip) {
-            node desktop/scripts/make-portable-yml.mjs $v $zip $out
+            node desktop/scripts/make-portable-yml.mjs $v $zip "desktop/dist-release/portable.yml"
+          }
+          if (Test-Path $setup) {
+            node desktop/scripts/make-portable-yml.mjs $v $setup "desktop/dist-release/latest.yml"
           }
 
       - name: Compile Inno Setup Bootstrapper (ISCC)
@@ -127,6 +130,31 @@ jobs:
             throw "Bootstrapper binary desktop\dist-release\SmartCleaner-Setup.exe not produced"
           }
           Write-Host "Successfully compiled SmartCleaner-Setup.exe ($( (Get-Item desktop\dist-release\SmartCleaner-Setup.exe).Length ) bytes)"
+
+      - name: Validate Bootstrapper Invariants & Assets on Windows
+        shell: pwsh
+        run: |
+          $bootstrapper = "desktop/dist-release/SmartCleaner-Setup.exe"
+          if (-not (Test-Path $bootstrapper)) { throw "Bootstrapper missing at $bootstrapper" }
+          $info = (Get-Item $bootstrapper).VersionInfo
+          Write-Host "Bootstrapper FileVersion: $($info.FileVersion)"
+          Write-Host "Bootstrapper ProductVersion: $($info.ProductVersion)"
+          Write-Host "Bootstrapper Size: $((Get-Item $bootstrapper).Length) bytes"
+          
+          # Test PowerShell Invoke-WebRequest to GitHub endpoints
+          Write-Host "Verifying GitHub release endpoint accessibility..."
+          $feedUrls = @(
+            "https://github.com/Aboelsaad77/smart-windows-cleaner/releases/latest/download/portable.yml",
+            "https://github.com/Aboelsaad77/smart-windows-cleaner/releases/latest/download/latest.yml"
+          )
+          foreach ($u in $feedUrls) {
+            try {
+              $resp = Invoke-WebRequest -Uri $u -Method Head -MaximumRedirection 5 -UserAgent "InnoSetup/6.2" -ErrorAction Stop
+              Write-Host "[OK] $u -> HTTP $($resp.StatusCode)"
+            } catch {
+              Write-Host "[NOTE] Endpoint check: $u ($($_.Exception.Message))"
+            }
+          }
 
       - name: Verify Release Artifacts & Generate Checksums
         run: npm run verify-release

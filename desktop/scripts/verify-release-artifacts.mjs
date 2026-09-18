@@ -111,6 +111,19 @@ function computeFileHashes(filePath) {
   return { sha256, sha512, sizeBytes: fileBuffer.length };
 }
 
+// Ensure latest.yml exists for Full installer
+const setupExePath = path.join(releaseDir, `SmartCleaner-Setup-${APP_VERSION}.exe`);
+const latestYmlPath = path.join(releaseDir, 'latest.yml');
+if (fs.existsSync(setupExePath) && !fs.existsSync(latestYmlPath) && !isVerifyOnly) {
+  try {
+    const ymlContent = makePortableYml(APP_VERSION, setupExePath);
+    fs.writeFileSync(latestYmlPath, ymlContent);
+    console.log(`[INFO] Auto-generated latest.yml from ${path.basename(setupExePath)}`);
+  } catch (err) {
+    console.warn(`[WARN] Could not generate latest.yml: ${err.message}`);
+  }
+}
+
 // Generate portable.yml if missing and portable zip is present
 const portableZipPath = path.join(releaseDir, `SmartCleaner-Portable-${APP_VERSION}.zip`);
 const portableYmlPath = path.join(releaseDir, 'portable.yml');
@@ -197,8 +210,25 @@ for (const artifact of EXPECTED_ARTIFACTS) {
   });
 }
 
+// Verify feed manifests are present and valid
+for (const manifestName of ['latest.yml', 'portable.yml']) {
+  const mPath = path.join(releaseDir, manifestName);
+  if (!fs.existsSync(mPath)) {
+    console.error(`[FAIL] Expected release feed manifest missing: ${manifestName}`);
+    hasFailure = true;
+  } else {
+    const content = fs.readFileSync(mPath, 'utf8');
+    if (!content.includes(`version: ${APP_VERSION}`) || !content.includes('sha512:')) {
+      console.error(`[FAIL] Feed manifest malformed or version mismatch: ${manifestName}`);
+      hasFailure = true;
+    } else {
+      console.log(`[PASS] Verified manifest schema & version: ${manifestName}`);
+    }
+  }
+}
+
 if (hasFailure) {
-  console.error('\n[FATAL] Release verification failed. Required artifacts are missing or invalid.');
+  console.error('\n[FATAL] Release verification failed. Required artifacts or manifests are missing or invalid.');
   process.exit(1);
 }
 

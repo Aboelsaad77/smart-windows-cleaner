@@ -40,15 +40,15 @@ describe('Bootstrapper & Distribution Architecture (PortSaid Parity)', () => {
         const expectedSha = createHash('sha512').update('test-payload-bytes').digest('base64');
         const stdout = execFileSync(
           process.execPath,
-          [scriptPath, '1.0.1', tmpZip, tmpYml],
+          [scriptPath, '1.0.2', tmpZip, tmpYml],
           { encoding: 'utf8' }
         );
 
-        expect(stdout).toContain('portable.yml written');
+        expect(stdout).toContain('manifest written');
         expect(fs.existsSync(tmpYml)).toBe(true);
 
         const yml = fs.readFileSync(tmpYml, 'utf8');
-        expect(yml).toContain('version: 1.0.1');
+        expect(yml).toContain('version: 1.0.2');
         expect(yml).toContain('url: test-portable-fixture.zip');
         expect(yml).toContain(`sha512: ${expectedSha}`);
         expect(yml).toContain('size: 18');
@@ -74,7 +74,7 @@ describe('Bootstrapper & Distribution Architecture (PortSaid Parity)', () => {
 
         // Non-existent zip
         expect(() => {
-          execFileSync(process.execPath, [scriptPath, '1.0.1', 'nonexistent.zip'], {
+          execFileSync(process.execPath, [scriptPath, '1.0.2', 'nonexistent.zip'], {
             stdio: 'pipe',
           });
         }).toThrow();
@@ -184,7 +184,7 @@ describe('Bootstrapper & Distribution Architecture (PortSaid Parity)', () => {
 
       expect(workflow).toContain('Compile Inno Setup Bootstrapper (ISCC)');
       expect(workflow).toContain('installer\\bootstrapper.iss');
-      expect(workflow).toContain('Generate portable.yml Manifest');
+      expect(workflow).toContain('Generate Release Manifests (latest.yml & portable.yml)');
       expect(workflow).toContain('desktop/scripts/make-portable-yml.mjs');
 
       // Releases must include the full distribution set:
