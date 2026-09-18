@@ -747,8 +747,7 @@ begin
   if not Exec(PayloadPath, '', WorkingDir, SW_SHOW, ewWaitUntilTerminated, Code) then
     RaiseException('Could not start the Full installer: ' + PayloadPath);
 
-  Log('Full installer process terminated with exit code ' + IntToStr(Code) +
-    ' (0x' + IntToHex(Code, 8) + ')');
+  Log('Full installer process terminated with exit code ' + IntToStr(Code));
 
   // Authoritatively verify whether the installation completed on disk and in registry
   Completed := FindInstalledApp(InstalledExe, InstalledVer);
