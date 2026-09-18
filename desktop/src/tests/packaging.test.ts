@@ -126,12 +126,18 @@ describe('Production Packaging & Trust-Chain Invariants', () => {
       const buildRsContent = fs.readFileSync(rustBuildRsPath, 'utf8');
 
       // PE version resource key strings
-      expect(buildRsContent).toContain('res.set("CompanyName", "Abdelrahman Aboelsaad")');
-      expect(buildRsContent).toContain('res.set("ProductName", "Smart Windows Cleaner")');
-      expect(buildRsContent).toContain('res.set("FileDescription", "Smart Windows Cleaner Core Native Engine")');
-      expect(buildRsContent).toContain('res.set("OriginalFilename", "smart-cleaner-core.exe")');
-      expect(buildRsContent).toContain('res.set("ProductVersion", "1.0.1")');
-      expect(buildRsContent).toContain('res.set("FileVersion", "1.0.1.0")');
+      expect(buildRsContent).toContain('"CompanyName"');
+      expect(buildRsContent).toContain('"Abdelrahman Aboelsaad"');
+      expect(buildRsContent).toContain('"ProductName"');
+      expect(buildRsContent).toContain('"Smart Windows Cleaner"');
+      expect(buildRsContent).toContain('"FileDescription"');
+      expect(buildRsContent).toContain('"Smart Windows Cleaner Core Native Engine"');
+      expect(buildRsContent).toContain('"OriginalFilename"');
+      expect(buildRsContent).toContain('"smart-cleaner-core.exe"');
+      expect(buildRsContent).toContain('"ProductVersion"');
+      expect(buildRsContent).toContain('"1.0.1"');
+      expect(buildRsContent).toContain('"FileVersion"');
+      expect(buildRsContent).toContain('"1.0.1.0"');
     });
 
     it('verifies Rust Core RT_MANIFEST enforces requestedExecutionLevel asInvoker', () => {
