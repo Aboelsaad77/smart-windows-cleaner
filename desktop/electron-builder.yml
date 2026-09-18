@@ -47,4 +47,4 @@ nsis:
   createDesktopShortcut: always
   createStartMenuShortcut: true
   uninstallDisplayName: Smart Windows Cleaner
-  runAfterFinish: true
+  runAfterFinish: false

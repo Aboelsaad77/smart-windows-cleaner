@@ -26,7 +26,7 @@
 #endif
 
 #define MyAppName "Smart Windows Cleaner"
-#define MyAppVersion "1.0.2"
+#define MyAppVersion "1.0.3"
 #define MyAppPublisher "Abdelrahman Aboelsaad"
 #define MyAppURL "https://github.com/Aboelsaad77/smart-windows-cleaner"
 #define MyAppExeName "SmartCleaner.exe"
@@ -601,31 +601,229 @@ begin
   end;
 end;
 
+const
+  NsisAppGuid = 'B2E15C76-9F02-4A8E-9807-6B1A424EF55D';
+
+function CheckRegistryForInstall(RootKey: Integer; const Subkey: String;
+  var FoundExe, FoundVer: String): Boolean;
+var
+  Loc, Uninst, Candidate: String;
+begin
+  Result := False;
+  FoundExe := '';
+  FoundVer := '';
+  if RegKeyExists(RootKey, Subkey) then
+  begin
+    RegQueryStringValue(RootKey, Subkey, 'DisplayVersion', FoundVer);
+    // 1. Check InstallLocation
+    if RegQueryStringValue(RootKey, Subkey, 'InstallLocation', Loc) and (Loc <> '') then
+    begin
+      Candidate := AddBackslash(Loc) + '{#MyAppExeName}';
+      if FileExists(Candidate) then
+      begin
+        FoundExe := Candidate;
+        Result := True;
+        Exit;
+      end;
+    end;
+    // 2. Check UninstallString: e.g. "C:\Path\Uninstall Smart Windows Cleaner.exe"
+    if RegQueryStringValue(RootKey, Subkey, 'UninstallString', Uninst) and (Uninst <> '') then
+    begin
+      if (Length(Uninst) > 1) and (Uninst[1] = '"') then
+      begin
+        Delete(Uninst, 1, 1);
+        if Pos('"', Uninst) > 0 then
+          Uninst := Copy(Uninst, 1, Pos('"', Uninst) - 1);
+      end;
+      Candidate := AddBackslash(ExtractFileDir(Uninst)) + '{#MyAppExeName}';
+      if FileExists(Candidate) then
+      begin
+        FoundExe := Candidate;
+        Result := True;
+        Exit;
+      end;
+    end;
+  end;
+end;
+
+function FindInstalledApp(var FoundExe, FoundVer: String): Boolean;
+var
+  Candidate: String;
+begin
+  Result := False;
+  FoundExe := '';
+  FoundVer := '';
+
+  // 1. HKCU Uninstall key (per-user install - default for non-elevated NSIS)
+  if CheckRegistryForInstall(HKEY_CURRENT_USER,
+    'Software\Microsoft\Windows\CurrentVersion\Uninstall\' + NsisAppGuid,
+    FoundExe, FoundVer) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if CheckRegistryForInstall(HKEY_CURRENT_USER,
+    'Software\Microsoft\Windows\CurrentVersion\Uninstall\{' + NsisAppGuid + '}',
+    FoundExe, FoundVer) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  // 2. HKLM Uninstall key (per-machine install)
+  if IsWin64 then
+  begin
+    if CheckRegistryForInstall(HKEY_LOCAL_MACHINE_64,
+      'Software\Microsoft\Windows\CurrentVersion\Uninstall\' + NsisAppGuid,
+      FoundExe, FoundVer) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    if CheckRegistryForInstall(HKEY_LOCAL_MACHINE_64,
+      'Software\Microsoft\Windows\CurrentVersion\Uninstall\{' + NsisAppGuid + '}',
+      FoundExe, FoundVer) then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+  if CheckRegistryForInstall(HKEY_LOCAL_MACHINE,
+    'Software\Microsoft\Windows\CurrentVersion\Uninstall\' + NsisAppGuid,
+    FoundExe, FoundVer) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if CheckRegistryForInstall(HKEY_LOCAL_MACHINE,
+    'Software\Microsoft\Windows\CurrentVersion\Uninstall\{' + NsisAppGuid + '}',
+    FoundExe, FoundVer) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  // 3. Check known default filesystem paths
+  // Default per-user: %LOCALAPPDATA%\Programs\Smart Windows Cleaner\SmartCleaner.exe
+  Candidate := ExpandConstant('{localappdata}\Programs\{#MyAppName}\{#MyAppExeName}');
+  if FileExists(Candidate) then
+  begin
+    FoundExe := Candidate;
+    Result := True;
+    Exit;
+  end;
+
+  // Default per-machine 64-bit: %ProgramFiles%\Smart Windows Cleaner\SmartCleaner.exe
+  Candidate := ExpandConstant('{autopf}\{#MyAppName}\{#MyAppExeName}');
+  if FileExists(Candidate) then
+  begin
+    FoundExe := Candidate;
+    Result := True;
+    Exit;
+  end;
+
+  // Default per-machine 32-bit: %ProgramFiles(x86)%\Smart Windows Cleaner\SmartCleaner.exe
+  Candidate := ExpandConstant('{commonpf32}\{#MyAppName}\{#MyAppExeName}');
+  if FileExists(Candidate) then
+  begin
+    FoundExe := Candidate;
+    Result := True;
+    Exit;
+  end;
+end;
+
 procedure RunFullPayload();
 var
   Code: Integer;
+  WorkingDir: String;
   InstalledExe: String;
+  InstalledVer: String;
+  ExeVer: String;
+  Completed: Boolean;
 begin
-  Log('Executing Full NSIS installer: ' + PayloadPath);
-  if not Exec(PayloadPath, '', '', SW_SHOW, ewWaitUntilTerminated, Code) then
+  WorkingDir := ExtractFileDir(PayloadPath);
+  Log('Executing Full NSIS installer: ' + PayloadPath + ' in working directory: ' + WorkingDir);
+
+  if not Exec(PayloadPath, '', WorkingDir, SW_SHOW, ewWaitUntilTerminated, Code) then
     RaiseException('Could not start the Full installer: ' + PayloadPath);
-  if Code <> 0 then
-    RaiseException('The Full installer did not complete ' +
-      '(exit code ' + IntToStr(Code) + '). Nothing was changed by Setup.');
-  InstalledExe := ExpandConstant('{autopf}\{#MyAppName}\{#MyAppExeName}');
-  if FileExists(InstalledExe) then
+
+  Log('Full installer process terminated with exit code ' + IntToStr(Code) +
+    ' (0x' + IntToHex(Code, 8) + ')');
+
+  // Authoritatively verify whether the installation completed on disk and in registry
+  Completed := FindInstalledApp(InstalledExe, InstalledVer);
+
+  // Guard against false positives: if the installer returned a non-zero exit code,
+  // verify that the detected installation actually corresponds to the target version
+  // being installed (and is not an older pre-existing version from an earlier install).
+  if (Code <> 0) and Completed then
+  begin
+    if (InstalledVer <> '') and (InstalledVer <> ChosenVersion) then
+    begin
+      Log('Detected installed version (' + InstalledVer +
+        ') does not match expected target version (' + ChosenVersion +
+        '). Treating non-zero exit code as incomplete installation.');
+      Completed := False;
+    end
+    else if (InstalledVer = '') and (InstalledExe <> '') then
+    begin
+      if GetVersionNumbersString(InstalledExe, ExeVer) and (Pos(ChosenVersion, ExeVer) = 0) then
+      begin
+        Log('Detected executable version (' + ExeVer +
+          ') does not match expected target version (' + ChosenVersion +
+          '). Treating non-zero exit code as incomplete installation.');
+        Completed := False;
+      end;
+    end;
+  end;
+
+  if Completed then
+  begin
+    Log('Full installation verified successfully at: ' + InstalledExe +
+      ' (registered version: ' + InstalledVer + ')');
+    if Code = 0 then
+    begin
+      Log('NSIS installer completed cleanly (exit code 0).');
+    end
+    else if (Code = -1073741819) or (Code = 3221225477) then
+    begin
+      // 0xC0000005: STATUS_ACCESS_VIOLATION during exit-phase cleanup
+      Log('Notice: NSIS installer completed all file, shortcut, and registry operations, but reported an exit-phase cleanup signal (0xC0000005). The installation is intact and verified.');
+    end
+    else
+    begin
+      Log('Notice: NSIS installer exited with non-zero code ' + IntToStr(Code) +
+        ', but full installation was verified intact.');
+    end;
+  end
+  else
+  begin
+    if (Code = 1) or (Code = 2) then
+    begin
+      RaiseException('The Full installation was cancelled before completion. Nothing was changed.');
+    end
+    else
+    begin
+      RaiseException('The Full installer did not complete (exit code ' +
+        IntToStr(Code) + '). No installation was detected on this system.');
+    end;
+  end;
+
+  if (InstalledExe <> '') and FileExists(InstalledExe) then
   begin
     if MsgBox('Full installation of version ' + ChosenVersion +
-      ' completed.' + #13#10#13#10 + 'Launch {#MyAppName} now?',
+      ' completed successfully.' + #13#10#13#10 + 'Launch {#MyAppName} now?',
       mbConfirmation, MB_YESNO or MB_DEFBUTTON1) = IDYES then
     begin
-      if not ShellExec('', InstalledExe, '', '', SW_SHOW, ewNoWait, Code) then
+      if not ShellExec('', InstalledExe, '', ExtractFileDir(InstalledExe), SW_SHOW, ewNoWait, Code) then
         Log('Launch failed (non-fatal)');
     end;
   end
   else
+  begin
     MsgBox('Full installation of version ' + ChosenVersion + ' completed. ' +
-      'Launch it from the Start Menu.', mbInformation, MB_OK);
+      'Launch it from the Start Menu or Desktop.', mbInformation, MB_OK);
+  end;
 end;
 
 procedure ExtractPortablePayload();

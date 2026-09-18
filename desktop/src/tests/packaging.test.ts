@@ -135,9 +135,9 @@ describe('Production Packaging & Trust-Chain Invariants', () => {
       expect(buildRsContent).toContain('"OriginalFilename"');
       expect(buildRsContent).toContain('"smart-cleaner-core.exe"');
       expect(buildRsContent).toContain('"ProductVersion"');
-      expect(buildRsContent).toContain('"1.0.2"');
+      expect(buildRsContent).toContain('"1.0.3"');
       expect(buildRsContent).toContain('"FileVersion"');
-      expect(buildRsContent).toContain('"1.0.2.0"');
+      expect(buildRsContent).toContain('"1.0.3.0"');
     });
 
     it('verifies Rust Core RT_MANIFEST enforces requestedExecutionLevel asInvoker', () => {

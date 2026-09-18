@@ -40,7 +40,7 @@ describe('Bootstrapper & Distribution Architecture (PortSaid Parity)', () => {
         const expectedSha = createHash('sha512').update('test-payload-bytes').digest('base64');
         const stdout = execFileSync(
           process.execPath,
-          [scriptPath, '1.0.2', tmpZip, tmpYml],
+          [scriptPath, '1.0.3', tmpZip, tmpYml],
           { encoding: 'utf8' }
         );
 
@@ -48,7 +48,7 @@ describe('Bootstrapper & Distribution Architecture (PortSaid Parity)', () => {
         expect(fs.existsSync(tmpYml)).toBe(true);
 
         const yml = fs.readFileSync(tmpYml, 'utf8');
-        expect(yml).toContain('version: 1.0.2');
+        expect(yml).toContain('version: 1.0.3');
         expect(yml).toContain('url: test-portable-fixture.zip');
         expect(yml).toContain(`sha512: ${expectedSha}`);
         expect(yml).toContain('size: 18');
@@ -174,6 +174,26 @@ describe('Bootstrapper & Distribution Architecture (PortSaid Parity)', () => {
       expect(iss).toContain('english.ModeFull=Full Installation (recommended)');
       expect(iss).toContain('arabic.ModeFull=');
       expect(iss).toContain('arabic.ModePort=');
+    });
+
+    it('verifies Full Installation completion authoritatively via registry and filesystem', () => {
+      const iss = stripIssComments(fs.readFileSync(issPath, 'utf8'));
+      expect(iss).toContain("NsisAppGuid = 'B2E15C76-9F02-4A8E-9807-6B1A424EF55D'");
+      expect(iss).toContain('FindInstalledApp(InstalledExe, InstalledVer)');
+      expect(iss).toContain('CheckRegistryForInstall(HKEY_CURRENT_USER');
+      expect(iss).toContain('CheckRegistryForInstall(HKEY_LOCAL_MACHINE');
+      expect(iss).toContain('ExtractFileDir(PayloadPath)');
+      expect(iss).toContain('0xC0000005');
+      expect(iss).toContain('No installation was detected on this system');
+    });
+
+    it('verifies NSIS template patch script is present and registered in package.json', () => {
+      const patchScript = path.join(desktopRoot, 'scripts/patch-nsis.mjs');
+      expect(fs.existsSync(patchScript)).toBe(true);
+
+      const pkgJson = JSON.parse(fs.readFileSync(path.join(desktopRoot, 'package.json'), 'utf8'));
+      expect(pkgJson.scripts.postinstall).toContain('patch-nsis.mjs');
+      expect(pkgJson.scripts.package).toContain('patch-nsis.mjs');
     });
   });
 

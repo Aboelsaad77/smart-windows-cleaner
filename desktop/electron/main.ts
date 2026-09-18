@@ -286,12 +286,36 @@ function createWindow() {
     },
   });
 
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error(`[RENDERER_FAIL_LOAD] Failed to load ${validatedURL}: ${errorDescription} (${errorCode})`);
+  });
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error(`[RENDERER_GONE] Render process gone: ${details.reason} (exitCode: ${details.exitCode})`);
+  });
+
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    if (level >= 2) {
+      console.error(`[RENDERER_CONSOLE] [Level ${level}] ${message} (${sourceId}:${line})`);
+    }
+  });
+
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    const prodPath = path.join(__dirname, '../../dist/index.html');
-    const fallbackPath = path.join(__dirname, '../dist/index.html');
-    mainWindow.loadFile(fs.existsSync(prodPath) ? prodPath : fallbackPath);
+    const appRoot = app.getAppPath();
+    const candidatePaths = [
+      path.join(appRoot, 'dist/index.html'),
+      path.join(__dirname, '../../dist/index.html'),
+      path.join(__dirname, '../dist/index.html'),
+    ];
+    const targetPath = candidatePaths.find((p) => fs.existsSync(p));
+    if (targetPath) {
+      mainWindow.loadFile(targetPath);
+    } else {
+      console.error('[FATAL] Could not locate dist/index.html in candidate paths:', candidatePaths);
+      mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    }
   }
 
   mainWindow.on('closed', () => {

@@ -322,7 +322,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "sc-ai-gateway"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "sc-file-models",
  "serde",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "sc-cli"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "fs2",
  "rusqlite",
@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "sc-db"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "rusqlite",
  "sc-file-models",
@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "sc-file-models"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "sc-local-rules"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "sc-file-models",
  "sc-risk-engine",
@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "sc-quarantine"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "fs2",
  "libc",
@@ -392,7 +392,7 @@ dependencies = [
 
 [[package]]
 name = "sc-risk-engine"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "sc-file-models",
  "serde",
@@ -400,7 +400,7 @@ dependencies = [
 
 [[package]]
 name = "sc-safety-engine"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "fs2",
  "sc-file-models",
@@ -410,7 +410,7 @@ dependencies = [
 
 [[package]]
 name = "sc-scanner"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "ahash",
  "fs2",
